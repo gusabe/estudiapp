@@ -312,6 +312,11 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
 @media (min-width:980px){.grid3{grid-template-columns:repeat(3,1fr)}}
 .fcheck{width:22px;height:22px;flex:none;cursor:pointer;margin:0}
 .ficha .grow{cursor:pointer}
+.drag{flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:400 20px/1 var(--mono);padding:6px 4px;color:var(--ink-2)}
+.drag:hover{color:var(--ink)}
+.seg-row.dragging{background:var(--fill);outline:1px solid var(--ink);outline-offset:-1px;position:relative;z-index:3}
+.seg-row.dragging .drag{cursor:grabbing;color:var(--ink)}
+body.dragging-on{cursor:grabbing;user-select:none;-webkit-user-select:none}
 .chip:disabled{opacity:.35;cursor:default;background:var(--bg);color:var(--ink)}
 .fmove{display:flex;gap:4px;flex:none}
 .fmove .round{width:28px;height:28px;font-size:14px}
@@ -373,6 +378,18 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
 
 <div id="toast" role="status" aria-live="polite"><span id="tmsg"></span><button id="tact" hidden></button></div>
 
+<dialog id="sgDlg" aria-labelledby="sgH">
+  <div class="sheet-head"><button class="btn plain" id="sgCancel" type="button">Cancelar</button><h2 id="sgH">Ficha</h2><button class="btn plain" id="sgSave" type="button">Guardar</button></div>
+  <div class="sheet-body">
+    <div class="section-h">Segundo examen</div>
+    <div class="group">
+      <label class="cell"><span class="grow">Título</span><input type="text" id="sgTitle" style="width:60%"></label>
+      <label class="cell"><span class="grow">Tipo</span><select id="sgCat"><option value="urb">Urbanismo</option><option value="edif">Edificación</option></select></label>
+      <label class="cell"><span class="grow">Lecturas</span><input type="number" id="sgN" min="0" max="99" style="width:80px"></label>
+    </div>
+    <div style="padding:14px 14px 0"><button class="btn danger" id="sgDel" type="button">Borrar esta ficha</button></div>
+  </div>
+</dialog>
 <dialog id="fiDlg" aria-labelledby="fiH">
   <div class="sheet-head"><button class="btn plain" id="fiCancel" type="button">Cancelar</button><h2 id="fiH">Ficha</h2><button class="btn plain" id="fiSave" type="button">Guardar</button></div>
   <div class="sheet-body">
@@ -457,7 +474,7 @@ function defaults(){
     v:3,
     temario:{blocks:JSON.parse(JSON.stringify(TEMARIO.blocks)),topics:JSON.parse(JSON.stringify(TEMARIO.topics))},
     config:{schedule:[5,5,5,5,5,4,0],pomo:{study:25,short:5,long:15,every:4,autoBreak:true,autoStudy:false,sound:true}},
-    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),fichas:{plan:[],edif:[],caso:[],orden:1},
+    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),fichas:{plan:[],edif:[],caso:[],segundo:[],orden:1},
     estado:{mode:'pomo',sel:{topicId:null,tipo:'test'},session:null,pause:null,
       timer:{phase:'estudio',running:false,endsAt:0,remaining:25*MIN,cycle:0,day:''}},
     ui:{theme:'auto',ink:null,bg:null}
@@ -470,7 +487,7 @@ function normalize(d){
   for(const k of Object.keys(D.config.pomo)) if(d.config.pomo[k]==null) d.config.pomo[k]=D.config.pomo[k];
   for(const k of Object.keys(D.estado)) if(d.estado[k]==null) d.estado[k]=D.estado[k];
   for(const k of Object.keys(D.ui)) if(d.ui[k]===undefined) d.ui[k]=D.ui[k];
-  for(const k of ['plan','edif','caso']) if(!Array.isArray(d.fichas[k])) d.fichas[k]=[];
+  for(const k of ['plan','edif','caso','segundo']) if(!Array.isArray(d.fichas[k])) d.fichas[k]=[];
   if(!d.fichas.orden){for(const k of ['plan','edif','caso'])d.fichas[k].sort(ficCmp);d.fichas.orden=1} // 1.3: orden alfanumérico inicial
   if(Array.isArray(d.fichas.comp)){ // versión 1.1: "composición" se reparte entre planeamiento y edificación
     const blk=id=>{const t=(d.temario.topics||[]).find(x=>x.id===id);const b=t&&(d.temario.blocks||[]).find(x=>x.id===t.block);return b?b.name:''};
@@ -733,8 +750,13 @@ function recount(){
   for(const l of S.lecturas){const o=CNT[l.topicId]||(CNT[l.topicId]={test:0,comp:0});o[l.tipo]=(o[l.tipo]||0)+1}
 }
 const topic=id=>IDX.t[id];
-const cnt=(t,ti)=>CNT[t]?.[ti]||0;
-const tlabel=id=>{const t=topic(id);return t?t.num+'. '+t.name:'Tema eliminado'};
+const SEGCAT={urb:'Urbanismo',edif:'Edificación'};
+const isC=id=>typeof id==='string'&&id.startsWith('c:');
+const citem=id=>isC(id)?S.fichas.segundo.find(x=>x.id===id.slice(2)):null;
+const validFor=(id,tipo)=>!!id&&(tipo==='comp'?!!citem(id):!!topic(id));
+const cnt=(t,ti)=>isC(t)?(ti==='comp'?(citem(t)?.n||0):0):(CNT[t]?.[ti]||0);
+const tlabel=id=>{if(isC(id)){const c=citem(id);return c?c.title:'Ficha eliminada'}const t=topic(id);return t?t.num+'. '+t.name:'Tema eliminado'};
+const itemName=id=>isC(id)?'la ficha «'+tlabel(id)+'»':'el tema '+(topic(id)?.num??'');
 
 /* sesiones */
 function dayObj(k,create){
@@ -768,21 +790,30 @@ function topicTotals(){
 
 /* lecturas */
 function addLectura(tid,tipo){
-  S.lecturas.push({id:uid(),topicId:tid,tipo,ts:Date.now()});recount();
+  if(isC(tid)){const c=citem(tid);if(!c)return;c.n=(c.n||0)+1;c.lastAt=Date.now()}
+  else{S.lecturas.push({id:uid(),topicId:tid,tipo,ts:Date.now()});recount()}
   const sel=S.estado.sel;
   if(!S.estado.session&&sel&&sel.topicId===tid&&sel.tipo===tipo) S.estado.sel={topicId:null,tipo};
   save();
 }
 function removeLectura(tid,tipo){
+  if(isC(tid)){const c=citem(tid);if(c)c.n=Math.max(0,(c.n||0)-1);save();return}
   for(let i=S.lecturas.length-1;i>=0;i--)if(S.lecturas[i].topicId===tid&&S.lecturas[i].tipo===tipo){S.lecturas.splice(i,1);break}
   recount();save();
 }
-const vuelta=tipo=>S.temario.topics.length?Math.min(...S.temario.topics.map(t=>cnt(t.id,tipo)))+1:1;
-const queue=tipo=>S.temario.topics.slice().sort((a,b)=>cnt(a.id,tipo)-cnt(b.id,tipo)||IDX.t[a.id].i-IDX.t[b.id].i);
+const segItems=()=>S.fichas.segundo.map((c,i)=>({id:'c:'+c.id,num:'',name:c.title,cat:c.cat,n:c.n||0,i}));
+function vuelta(tipo){
+  if(tipo==='comp'){const L=S.fichas.segundo;return L.length?Math.min(...L.map(c=>c.n||0))+1:1}
+  return S.temario.topics.length?Math.min(...S.temario.topics.map(t=>cnt(t.id,tipo)))+1:1;
+}
+function queue(tipo){
+  if(tipo==='comp')return segItems().sort((a,b)=>a.n-b.n||a.i-b.i);
+  return S.temario.topics.slice().sort((a,b)=>cnt(a.id,tipo)-cnt(b.id,tipo)||IDX.t[a.id].i-IDX.t[b.id].i);
+}
 function currentSel(){
   const L=S.estado.session;if(L)return{topicId:L.topicId,tipo:L.tipo};
   const sel=S.estado.sel||{},tipo=sel.tipo||'test';
-  if(sel.topicId&&topic(sel.topicId))return{topicId:sel.topicId,tipo,manual:true};
+  if(validFor(sel.topicId,tipo))return{topicId:sel.topicId,tipo,manual:true};
   return{topicId:queue(tipo)[0]?.id,tipo};
 }
 function setSel(topicId,tipo){
@@ -793,10 +824,14 @@ function setSel(topicId,tipo){
 }
 function setTipo(tipo){
   const L=S.estado.session;
-  if(L)setSel(L.topicId,tipo);
-  else{S.estado.sel={topicId:S.estado.sel?.topicId??null,tipo};save();renderAll()}
+  if(L){const id=validFor(L.topicId,tipo)?L.topicId:queue(tipo)[0]?.id;if(!id){toast('Primero añade fichas en Temario > Segundo examen');return}setSel(id,tipo)}
+  else{const cur=S.estado.sel?.topicId;S.estado.sel={topicId:validFor(cur,tipo)?cur:null,tipo};save();renderAll()}
 }
-function pickTopic(tid){const t=topic(tid);if(!t)return;setSel(tid,currentSel().tipo);toast('Tema '+t.num+' seleccionado')}
+function pickTopic(tid){
+  if(isC(tid)){if(!citem(tid))return;setSel(tid,'comp');toast('Ficha «'+tlabel(tid)+'» seleccionada');return}
+  const t=topic(tid);if(!t)return;const tipo=currentSel().tipo==='comp'?'test':currentSel().tipo;
+  setSel(tid,tipo);toast('Tema '+t.num+' seleccionado');
+}
 
 /* eventos */
 const evSort=(a,b)=>(a.date+(a.time||'99')).localeCompare(b.date+(b.time||'99'));
@@ -831,7 +866,7 @@ function commitLive(end,pomo){
 }
 function beginSession(at){
   const sel=currentSel();
-  if(!sel.topicId){toast('Elige un tema');return false}
+  if(!sel.topicId){toast(sel.tipo==='comp'?'Primero añade fichas en Temario > Segundo examen':'Elige un tema');return false}
   S.estado.sel={topicId:sel.topicId,tipo:sel.tipo};
   S.estado.session={topicId:sel.topicId,tipo:sel.tipo,start:at};
   return true;
@@ -891,8 +926,9 @@ function setMode(m){
   S.estado.mode=m;save();renderAll();
 }
 function offerLectura(sess){
-  const t=topic(sess.topicId);if(!t)return;
-  toast('Sesión guardada.','+1 lectura de '+tipoName(sess.tipo).toLowerCase()+' al tema '+t.num,()=>{addLectura(t.id,sess.tipo);renderAll();toast('Tema '+t.num+': '+cnt(t.id,sess.tipo)+' lecturas de '+tipoName(sess.tipo).toLowerCase())});
+  const id=sess.topicId;if(!(isC(id)?citem(id):topic(id)))return;
+  const tipo=isC(id)?'comp':sess.tipo;
+  toast('Sesión guardada.','+1 lectura a '+itemName(id),()=>{addLectura(id,tipo);renderAll();toast(tlabel(id)+': '+pad(cnt(id,tipo))+' lecturas')});
 }
 function timerInfo(){
   const T=TM(),now=Date.now();
@@ -952,12 +988,15 @@ function renderAll(){renderChrome();renderView()}
 function topicOptions(sel){
   return S.temario.blocks.map(b=>`<optgroup label="${esc(b.name)}">${S.temario.topics.filter(t=>t.block===b.id).map(t=>`<option value="${t.id}"${t.id===sel?' selected':''}>${t.num}. ${esc(t.name)}</option>`).join('')}</optgroup>`).join('');
 }
+function compOptions(sel){
+  return Object.entries(SEGCAT).map(([k,n])=>{const L=S.fichas.segundo.filter(c=>c.cat===k);return L.length?`<optgroup label="${n}">${L.map(c=>`<option value="c:${c.id}"${'c:'+c.id===sel?' selected':''}>${esc(c.title)}</option>`).join('')}</optgroup>`:''}).join('');
+}
 const tipoOptions=sel=>TIPOS.map(t=>`<option value="${t.id}"${t.id===sel?' selected':''}>${t.name}</option>`).join('');
 
 function renderChrome(){
   const k=todayK(),ex=nextExam();
   $('#today').textContent=fmtLong(k);
-  $('#tagline').textContent=`Oposición · ${S.temario.topics.length} temas en ${S.temario.blocks.length} bloques · Vuelta ${vuelta('test')} de test y ${vuelta('comp')} de composición`+(ex?` · ${evFull(ex)} ${whenTxt(daysTo(ex.date)).toLowerCase()}`:'')+(DBX.on&&DBX.status?' · Dropbox: '+DBX.status:'');
+  $('#tagline').textContent=`Oposición · ${S.temario.topics.length} temas en ${S.temario.blocks.length} bloques · Vuelta ${vuelta('test')} de test`+(S.fichas.segundo.length?` y ${vuelta('comp')} de composición`:'')+(ex?` · ${evFull(ex)} ${whenTxt(daysTo(ex.date)).toLowerCase()}`:'')+(DBX.on&&DBX.status?' · Dropbox: '+DBX.status:'');
   tick();
 }
 function dotsHTML(){
@@ -1021,23 +1060,25 @@ function eventCell(e){
 /* ---------- vueltas al temario ---------- */
 let VTIPO=null;
 function vueltasHTML(){
-  const ti=VTIPO||currentSel().tipo,T=S.temario.topics,n=T.length;
-  const cs=T.map(t=>cnt(t.id,ti)),cur=Math.min(...cs)+1,top=Math.max(cur,...cs);
+  const ti=VTIPO||currentSel().tipo,comp=ti==='comp';
+  const seg=`<div class="seg">${TIPOS.map(x=>`<button data-vt="${x.id}" aria-pressed="${ti===x.id}">${x.name}</button>`).join('')}</div>`;
+  const cs=comp?S.fichas.segundo.map(c=>c.n||0):S.temario.topics.map(t=>cnt(t.id,ti)),n=cs.length;
+  if(!n)return seg+`<div class="strip" style="border-bottom:1px solid var(--ink)"><span class="mono" style="font-size:12px;text-transform:uppercase">Aún no hay fichas del segundo examen.</span> <button class="btn plain" data-a="goseg">Añadirlas</button></div>`;
+  const cur=Math.min(...cs)+1,top=Math.max(cur,...cs);
   const done=k=>cs.filter(c=>c>=k).length;
   let rows='';
   for(let k=Math.max(1,top-5);k<=top;k++){const d=done(k);
     rows+=`<div class="vrow${k===cur?' cur':''}"><span>${pad(k)}</span><div class="track"><i style="left:0;width:${pct(d,n)}%;background:var(--ink)"></i></div><span class="r num">${d===n?'Hecha':d+'/'+n}</span></div>`}
   const dc=done(cur);
-  return `<div class="seg">${TIPOS.map(x=>`<button data-vt="${x.id}" aria-pressed="${ti===x.id}">${x.name}</button>`).join('')}</div>
-  <div class="strip" style="border-bottom:1px solid var(--ink)">
-    <div class="vbig"><span class="tl">Vuelta</span><span class="clock md num">${pad(cur)}</span><span class="mono" style="font-size:12px;text-transform:uppercase">${dc} de ${n} temas · ${pct(dc,n)} %</span></div>
+  return seg+`<div class="strip" style="border-bottom:1px solid var(--ink)">
+    <div class="vbig"><span class="tl">Vuelta</span><span class="clock md num">${pad(cur)}</span><span class="mono" style="font-size:12px;text-transform:uppercase">${dc} de ${n} ${comp?'fichas':'temas'} · ${pct(dc,n)} %</span></div>
     ${rows}
   </div>`;
 }
 
 /* ---------- HOY ---------- */
 function renderHoy(){
-  const k=todayK(),tot=totalOn(k),g=goalOn(k),list=sessionsOn(k),sel=currentSel(),t=topic(sel.topicId),I=timerInfo(),pomo=isPomo();
+  const k=todayK(),tot=totalOn(k),g=goalOn(k),list=sessionsOn(k),sel=currentSel(),t=topic(sel.topicId),c=citem(sel.topicId),I=timerInfo(),pomo=isPomo(),isComp=sel.tipo==='comp';
   const wk0=addDays(k,-wd(k)),wkT=sumBetween(wk0,k),ex=nextExam(),up=upcoming().slice(0,4);
   const q=queue(sel.tipo).slice(0,6),TT=topicTotals();
   const P=PO();
@@ -1067,15 +1108,17 @@ function renderHoy(){
       </div>
       <div class="section-h">Qué estudias</div>
       <div class="group">
-        <label class="cell"><span class="grow">Tema</span><select id="hTopic" style="max-width:62%">${topicOptions(sel.topicId)}</select></label>
+        ${isComp&&!S.fichas.segundo.length?`<button class="cell act" data-a="goseg">Añadir fichas del segundo examen</button>`
+          :`<label class="cell"><span class="grow">${isComp?'Ficha':'Tema'}</span><select id="hTopic" style="max-width:62%">${isComp?compOptions(sel.topicId):topicOptions(sel.topicId)}</select></label>`}
         <div class="cell"><span class="grow">Tipo de estudio</span>${TIPOS.map(ti=>`<button class="chip${sel.tipo===ti.id?' on':''}" data-tipo="${ti.id}">${ti.name}</button>`).join('')}</div>
-        ${t?`<div class="cell"><div class="grow"><div>Lecturas del tema ${t.num}</div><div class="sub">Test ${pad(cnt(t.id,'test'))} · Composición ${pad(cnt(t.id,'comp'))} · ${fmtHM(TT[t.id]?.ms||0)} estudiadas</div></div><button class="btn" data-a="plus">+1 ${tipoName(sel.tipo)}</button></div>`:''}
-        ${sel.manual&&!S.estado.session&&q[0]&&q[0].id!==sel.topicId?`<button class="cell act" data-a="follow">Volver al orden: tema ${q[0].num}</button>`:''}
+        ${t&&!isComp?`<div class="cell"><div class="grow"><div>Lecturas del tema ${t.num}</div><div class="sub">Test ${pad(cnt(t.id,'test'))} · ${fmtHM(TT[t.id]?.ms||0)} estudiadas</div></div><button class="btn" data-a="plus">+1 Test</button></div>`:''}
+        ${c&&isComp?`<div class="cell"><div class="grow"><div>Lecturas de la ficha</div><div class="sub">${SEGCAT[c.cat]||''} · Composición ${pad(c.n||0)} · ${fmtHM(TT[sel.topicId]?.ms||0)} estudiadas</div></div><button class="btn" data-a="plus">+1 Composición</button></div>`:''}
+        ${sel.manual&&!S.estado.session&&q[0]&&q[0].id!==sel.topicId?`<button class="cell act" data-a="follow">Volver al orden: ${isComp?esc(q[0].name):'tema '+q[0].num}</button>`:''}
       </div>
       <div class="section-h">Vueltas al temario</div>
       ${vueltasHTML()}
       <div class="section-h">Siguientes en ${tipoName(sel.tipo).toLowerCase()}</div>
-      <div class="chips">${q.map(x=>`<button class="chip${x.id===sel.topicId?' on':''}" data-tid="${x.id}">${x.num} <span>${esc(x.name)}</span></button>`).join('')}</div>
+      <div class="chips">${q.length?q.map(x=>`<button class="chip${x.id===sel.topicId?' on':''}" data-tid="${x.id}">${x.num?x.num+' <span>'+esc(x.name)+'</span>':esc(x.name)}</button>`).join(''):'<span class="mono" style="font-size:12px;text-transform:uppercase">Sin fichas todavía</span>'}</div>
     </div>
   </div>
   <div class="rule" aria-hidden="true"></div>
@@ -1093,7 +1136,8 @@ $('#v-hoy').addEventListener('click',e=>{
   if(vt){VTIPO=vt.dataset.vt;renderHoy();return}
   if(a){const x=a.dataset.a,sel=currentSel();
     if(x==='play')toggle();else if(x==='stop')stop();else if(x==='skip')skip();
-    else if(x==='plus'){addLectura(sel.topicId,sel.tipo);renderAll();const t=topic(sel.topicId);toast('Tema '+t.num+': '+cnt(t.id,sel.tipo)+' lecturas de '+tipoName(sel.tipo).toLowerCase(),'Deshacer',()=>{removeLectura(t.id,sel.tipo);renderAll()})}
+    else if(x==='plus'){const id=sel.topicId,tp=sel.tipo;addLectura(id,tp);renderAll();toast(tlabel(id)+': '+pad(cnt(id,tp))+' lecturas de '+tipoName(tp).toLowerCase(),'Deshacer',()=>{removeLectura(id,tp);renderAll()})}
+    else if(x==='goseg'){TEMP='2';show('tem')}
     else if(x==='follow'){S.estado.sel={topicId:null,tipo:sel.tipo};save();renderAll()}
     else if(x==='newev')openEvent(null,todayK());
   }else if(m)setMode(m.dataset.mode);
@@ -1104,11 +1148,13 @@ $('#v-hoy').addEventListener('click',e=>{
 $('#v-hoy').addEventListener('change',e=>{if(e.target.id==='hTopic')setSel(e.target.value,currentSel().tipo)});
 
 /* ---------- TEMARIO ---------- */
-let TEMF={q:'',b:'',f:''};
+let TEMF={q:'',b:'',f:''},TEMP='1',SEGF='';
+function temPages(){return `<div class="seg"><button data-tp="1" aria-pressed="${TEMP==='1'}">Primer examen</button><button data-tp="2" aria-pressed="${TEMP==='2'}">Segundo examen</button></div>`}
 function renderTem(){
+  if(TEMP==='2')return renderSeg();
   const {blocks,topics}=S.temario,TT=topicTotals(),sel=currentSel(),L=S.estado.session;
-  const vT=vuelta('test'),vC=vuelta('comp'),nT=queue('test')[0]?.id,nC=queue('comp')[0]?.id,q=TEMF.q.trim().toLowerCase();
-  const ok=t=>(!q||t.name.toLowerCase().includes(q)||String(t.num)===q)&&(!TEMF.b||t.block===TEMF.b)&&(!TEMF.f||(TEMF.f==='test'&&cnt(t.id,'test')<vT)||(TEMF.f==='comp'&&cnt(t.id,'comp')<vC));
+  const vT=vuelta('test'),nT=queue('test')[0]?.id,q=TEMF.q.trim().toLowerCase();
+  const ok=t=>(!q||t.name.toLowerCase().includes(q)||String(t.num)===q)&&(!TEMF.b||t.block===TEMF.b)&&(!TEMF.f||cnt(t.id,'test')<vT);
   const ctr=(t,ti,nx)=>{const n=cnt(t.id,ti);return `<span class="ctr"><span class="lb">${ti==='test'?'Test':'Comp.'}</span><button class="round" data-minus="${ti}" data-t="${t.id}" aria-label="Restar lectura de ${tipoName(ti)}" ${n?'':'disabled'}>−</button><b class="${n?'':'z'}${nx?' nxt':''}" title="${nx?'Siguiente en '+tipoName(ti).toLowerCase():''}">${pad(n)}</b><button class="round" data-plus="${ti}" data-t="${t.id}" aria-label="Sumar lectura de ${tipoName(ti)}">+</button></span>`};
   let body='';
   for(const b of blocks){
@@ -1117,18 +1163,19 @@ function renderTem(){
     body+=`<div class="section-h">Bloque ${IDX.b[b.id].i+1} · ${esc(b.name)}</div><div class="group">`+vis.map(t=>{
       const tt=TT[t.id];
       return `<div class="cell tcell${t.id===sel.topicId?' cur':''}"><span class="val num" style="width:30px;text-align:right">${t.num}</span>
-        <div class="grow"><div class="tn" data-tid="${t.id}">${L&&L.topicId===t.id?'▶\uFE0E ':''}${esc(t.name)}</div><div class="sub">${tt?fmtHM(tt.ms)+' · última sesión '+fmtDMY(dkey(tt.last)):'Sin sesiones'}${t.id===nT?' · <span class="hl">Siguiente test</span>':''}${t.id===nC?' · <span class="hl">Siguiente composición</span>':''}</div></div>
-        <span class="ctrs">${ctr(t,'test',t.id===nT)}${ctr(t,'comp',t.id===nC)}</span></div>`}).join('')+`</div>`;
+        <div class="grow"><div class="tn" data-tid="${t.id}">${L&&L.topicId===t.id?'▶\uFE0E ':''}${esc(t.name)}</div><div class="sub">${tt?fmtHM(tt.ms)+' · última sesión '+fmtDMY(dkey(tt.last)):'Sin sesiones'}${t.id===nT?' · <span class="hl">Siguiente</span>':''}</div></div>
+        <span class="ctrs">${ctr(t,'test',t.id===nT)}</span></div>`}).join('')+`</div>`;
   }
-  const lt=S.lecturas.filter(l=>l.tipo==='test').length,lc=S.lecturas.length-lt;
+  const lt=S.lecturas.filter(l=>l.tipo==='test').length;
   $('#v-tem').innerHTML=`
   <h1 class="large-title">Temario</h1>
-  <p class="subtitle">${topics.length} temas · ${lt} lecturas de test · ${lc} de composición · Vuelta ${vT} de test y ${vC} de composición</p>
+  <p class="subtitle">Primer examen · ${topics.length} temas · ${lt} lecturas de test · Vuelta ${vT}</p>
+  ${temPages()}
   <div class="chips"><button class="chip${!TEMF.b?' on':''}" data-b="">Todos</button>${blocks.map(b=>`<button class="chip${TEMF.b===b.id?' on':''}" data-b="${b.id}">${esc(b.name)} <span>${topics.filter(t=>t.block===b.id).length}</span></button>`).join('')}</div>
   <div class="searchbar"><input type="search" id="tq" placeholder="Buscar tema o número" value="${esc(TEMF.q)}" aria-label="Buscar tema">
-    <button class="chip${TEMF.f==='test'?' on':''}" data-f="test">Pendientes vuelta ${vT} test</button><button class="chip${TEMF.f==='comp'?' on':''}" data-f="comp">Pendientes vuelta ${vC} comp.</button></div>
+    <button class="chip${TEMF.f==='test'?' on':''}" data-f="test">Pendientes vuelta ${vT}</button></div>
   ${body||'<div class="empty" style="border-bottom:1px solid var(--ink)">Ningún tema coincide con el filtro.</div>'}
-  <p class="section-f">Cada contador es el número de veces que has leído el tema en test o en composición. El número subrayado es el siguiente en tu orden. Pulsa el nombre de un tema para estudiarlo.</p>`;
+  <p class="section-f">Cada contador es el número de veces que has leído el tema para el test. El número subrayado es el siguiente en tu orden. Pulsa el nombre de un tema para estudiarlo.</p>`;
 }
 $('#v-tem').addEventListener('click',e=>{
   const pl=e.target.closest('[data-plus]'),mi=e.target.closest('[data-minus]'),tn=e.target.closest('[data-tid]'),b=e.target.closest('[data-b]'),f=e.target.closest('[data-f]');
@@ -1138,6 +1185,104 @@ $('#v-tem').addEventListener('click',e=>{
   else if(b){TEMF.b=b.dataset.b;renderTem()}
   else if(f){TEMF.f=TEMF.f===f.dataset.f?'':f.dataset.f;renderTem()}
 });
+$('#v-tem').addEventListener('click',e=>{const tp=e.target.closest('[data-tp]');if(tp){TEMP=tp.dataset.tp;renderTem()}});
+
+/* ---------- TEMARIO · SEGUNDO EXAMEN: fichas de urbanismo y de edificación ---------- */
+const segOk=c=>!SEGF||c.cat===SEGF;
+function renderSeg(){
+  const L=S.fichas.segundo,TT=topicTotals(),vis=L.filter(segOk),sel=currentSel(),live=S.estado.session,nx=queue('comp')[0]?.id;
+  const count=k=>L.filter(c=>!k||c.cat===k).length;
+  const rows=vis.map((c,vi)=>{const id='c:'+c.id,n=c.n||0,tt=TT[id];
+    return `<div class="cell seg-row${id===sel.topicId?' cur':''}" data-sid="${c.id}">
+      <span class="drag" data-drag="${c.id}" title="Arrastra para reordenar" aria-hidden="true">≡</span>
+      <div class="grow" style="cursor:pointer" data-segedit="${c.id}"><div class="ft">${live&&live.topicId===id?'▶\uFE0E ':''}${esc(c.title)}</div><div class="sub">${SEGCAT[c.cat]}${tt?' · '+fmtHM(tt.ms):''} · ${c.lastAt?'última lectura '+fmtDMY(dkey(c.lastAt)):'sin lecturas'}${id===nx?' · <span class="hl">Siguiente</span>':''}</div></div>
+      <span class="ctr"><span class="lb">Lecturas</span><button class="round" data-segm="${c.id}" aria-label="Restar lectura" ${n?'':'disabled'}>−</button><b class="${n?'':'z'}">${pad(n)}</b><button class="round" data-segp="${c.id}" aria-label="Sumar lectura">+</button></span>
+      <span class="fmove"><button class="round" data-segmv="-1" data-id="${c.id}" aria-label="Subir ${esc(c.title)}" ${vi===0?'disabled':''}>↑</button><button class="round" data-segmv="1" data-id="${c.id}" aria-label="Bajar ${esc(c.title)}" ${vi===vis.length-1?'disabled':''}>↓</button></span>
+    </div>`}).join('');
+  $('#v-tem').innerHTML=`
+  <h1 class="large-title">Temario</h1>
+  <p class="subtitle">Segundo examen · ${count('urb')} fichas de urbanismo · ${count('edif')} de edificación${L.length?' · Vuelta '+vuelta('comp'):''}</p>
+  ${temPages()}
+  <div class="chips">${[['','Todas las fichas'],['urb','Fichas de urbanismo'],['edif','Fichas de edificación']].map(([v,l])=>`<button class="chip${SEGF===v?' on':''}" data-segf="${v}">${l} <span>${count(v)}</span></button>`).join('')}<button class="chip" data-segsort style="margin-left:auto" ${L.length<2?'disabled':''}>Ordenar A–Z</button></div>
+  <div class="group" id="segList">
+    <div class="cell newf"><input type="text" id="segNew" placeholder="Nueva ficha" aria-label="Título de la nueva ficha"><select id="segCat" aria-label="Tipo de ficha">${Object.entries(SEGCAT).map(([k,n])=>`<option value="${k}"${(SEGF||'urb')===k?' selected':''}>${n}</option>`).join('')}</select><button class="btn" id="segAdd">Añadir</button></div>
+    ${rows||`<div class="empty">${L.length?'Ninguna ficha en este filtro.':'Aún no hay fichas. Escribe el título arriba, elige urbanismo o edificación y pulsa Añadir.'}</div>`}
+  </div>
+  <p class="section-f">Las fichas nuevas entran en orden alfanumérico. Arrástralas por ≡ o usa ↑ ↓ para colocarlas a tu gusto. El contador suma tus lecturas de composición y alimenta la barra de Hoy. Pulsa una ficha para editarla.</p>`;
+}
+function segAdd(){
+  const inp=$('#segNew'),title=inp.value.trim();
+  if(!title){inp.focus();toast('Escribe el título de la ficha');return}
+  ficInsert(S.fichas.segundo,{id:uid(),title,cat:$('#segCat').value,n:0,lastAt:0,createdAt:Date.now()});
+  save();renderSeg();$('#segNew').focus();
+}
+function segApplyOrder(ids){ // ids = nuevo orden de las fichas visibles; las ocultas por el filtro no se mueven
+  const L=S.fichas.segundo,by=Object.fromEntries(L.map(x=>[x.id,x])),slots=[];
+  L.forEach((x,i)=>{if(ids.includes(x.id))slots.push(i)});
+  const out=L.slice();slots.forEach((slot,j)=>out[slot]=by[ids[j]]);S.fichas.segundo=out;
+}
+$('#v-tem').addEventListener('click',e=>{
+  if(TEMP!=='2')return;
+  const f=e.target.closest('[data-segf]'),p=e.target.closest('[data-segp]'),m=e.target.closest('[data-segm]'),mv=e.target.closest('[data-segmv]'),ed=e.target.closest('[data-segedit]');
+  if(f){SEGF=f.dataset.segf;renderSeg()}
+  else if(e.target.closest('#segAdd'))segAdd();
+  else if(e.target.closest('[data-segsort]')){const prev=S.fichas.segundo.slice();S.fichas.segundo.sort(ficCmp);save();renderSeg();toast('Fichas ordenadas de la A a la Z','Deshacer',()=>{S.fichas.segundo=prev;save();renderSeg()})}
+  else if(p){addLectura('c:'+p.dataset.segp,'comp');renderAll()}
+  else if(m){removeLectura('c:'+m.dataset.segm,'comp');renderAll()}
+  else if(mv){const ids=S.fichas.segundo.filter(segOk).map(x=>x.id),i=ids.indexOf(mv.dataset.id),j=i+ +mv.dataset.segmv;
+    if(i<0||j<0||j>=ids.length)return;[ids[i],ids[j]]=[ids[j],ids[i]];segApplyOrder(ids);save();renderSeg();
+    const b=document.querySelector(`[data-segmv="${mv.dataset.segmv}"][data-id="${mv.dataset.id}"]`);if(b&&!b.disabled)b.focus()}
+  else if(ed)openSeg(ed.dataset.segedit);
+});
+$('#v-tem').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='segNew'){e.preventDefault();segAdd()}});
+/* arrastrar para reordenar (ratón, dedo o lápiz) */
+let DRAG=null;
+$('#v-tem').addEventListener('pointerdown',e=>{
+  const h=e.target.closest('[data-drag]');if(!h||TEMP!=='2')return;
+  e.preventDefault();
+  const row=h.closest('.seg-row');
+  try{h.setPointerCapture(e.pointerId)}catch(x){}
+  row.classList.add('dragging');document.body.classList.add('dragging-on');
+  DRAG={row,h,start:[...row.parentElement.querySelectorAll('.seg-row')].map(r=>r.dataset.sid).join()};
+});
+$('#v-tem').addEventListener('pointermove',e=>{
+  if(!DRAG)return;
+  const y=e.clientY,row=DRAG.row;
+  let pv=row.previousElementSibling;
+  while(pv&&pv.classList.contains('seg-row')){const r=pv.getBoundingClientRect();if(y<r.top+r.height/2){pv.before(row);pv=row.previousElementSibling}else break}
+  let nx=row.nextElementSibling;
+  while(nx&&nx.classList.contains('seg-row')){const r=nx.getBoundingClientRect();if(y>r.top+r.height/2){nx.after(row);nx=row.nextElementSibling}else break}
+  if(y<150)scrollBy(0,-14);else if(y>innerHeight-130)scrollBy(0,14);
+});
+function endDrag(){
+  if(!DRAG)return;
+  const {row}=DRAG,ids=[...row.parentElement.querySelectorAll('.seg-row')].map(r=>r.dataset.sid);
+  row.classList.remove('dragging');document.body.classList.remove('dragging-on');
+  const changed=ids.join()!==DRAG.start;DRAG=null;
+  if(changed){segApplyOrder(ids);save()}
+  renderSeg();
+}
+$('#v-tem').addEventListener('pointerup',endDrag);
+$('#v-tem').addEventListener('pointercancel',endDrag);
+/* hoja de edición de una ficha del segundo examen */
+let SED=null;
+function openSeg(id){
+  const c=S.fichas.segundo.find(x=>x.id===id);if(!c)return;SED=id;
+  $('#sgTitle').value=c.title;$('#sgCat').value=c.cat;$('#sgN').value=c.n||0;$('#sgDlg').showModal();
+}
+$('#sgCancel').onclick=()=>$('#sgDlg').close();
+$('#sgSave').onclick=()=>{
+  const c=S.fichas.segundo.find(x=>x.id===SED);if(!c)return;
+  const t=$('#sgTitle').value.trim();if(!t){toast('La ficha necesita un título');return}
+  const n=Math.max(0,Math.round(+$('#sgN').value||0));
+  Object.assign(c,{title:t,cat:$('#sgCat').value});if(n!==(c.n||0)){c.n=n;if(n)c.lastAt=c.lastAt||Date.now()}
+  save();$('#sgDlg').close();renderAll();toast('Ficha guardada');
+};
+$('#sgDel').onclick=()=>{
+  const L=S.fichas.segundo,i=L.findIndex(x=>x.id===SED);if(i<0)return;const[rm]=L.splice(i,1);
+  const sel=S.estado.sel;if(sel&&sel.topicId==='c:'+rm.id&&!S.estado.session)S.estado.sel={topicId:null,tipo:sel.tipo};
+  save();$('#sgDlg').close();renderAll();toast('Ficha borrada','Deshacer',()=>{S.fichas.segundo.splice(i,0,rm);save();renderAll()});
+};
 $('#v-tem').addEventListener('input',e=>{if(e.target.id==='tq'){TEMF.q=e.target.value;const p=e.target.selectionStart;renderTem();const i=$('#tq');i.focus();i.setSelectionRange(p,p)}});
 
 /* ---------- FICHAS ---------- */
@@ -1325,7 +1470,7 @@ function renderReg(){
     return `<tr data-k="${x}" class="${x===REG?'on':''}"><td>${fmtShort(x)}</td><td class="num">${fmtHM(tot)}</td><td class="num">${g?pct(tot,g)+' %':'—'}</td><td class="num">${pomosOn(x)}</td><td>${tops.join(', ')}</td></tr>`}).join('');
   const list=sessionsOn(REG),dTot=list.reduce((a,s)=>a+dur(s),0);
   const edit=list.map(s=>s.live?`<div class="cell"><div class="grow"><div>${esc(tlabel(s.topicId))}</div><div class="sub">${fmtClock(s.start)}–ahora · ${tipoName(s.tipo)} · En curso</div></div><span class="val num">${fmtHM(dur(s))}</span></div>`:
-    `<div class="cell" data-id="${s.id}"><div class="rrow"><input type="time" data-f="start" value="${fmtClock(s.start)}" aria-label="Inicio"><input type="time" data-f="end" value="${fmtClock(s.end)}" aria-label="Fin"><select data-f="topicId" aria-label="Tema">${topicOptions(s.topicId)}</select><select data-f="tipo" aria-label="Tipo">${tipoOptions(s.tipo)}</select><input type="text" data-f="note" value="${esc(s.note)}" placeholder="Nota" aria-label="Nota"></div><span class="val num">${fmtHM(dur(s))}${s.pomo?' ●':''}</span><button class="round" data-del="${s.id}" aria-label="Eliminar sesión">×</button></div>`).join('');
+    `<div class="cell" data-id="${s.id}"><div class="rrow"><input type="time" data-f="start" value="${fmtClock(s.start)}" aria-label="Inicio"><input type="time" data-f="end" value="${fmtClock(s.end)}" aria-label="Fin"><select data-f="topicId" aria-label="Tema o ficha">${isC(s.topicId)?compOptions(s.topicId):topicOptions(s.topicId)}</select><select data-f="tipo" aria-label="Tipo">${tipoOptions(s.tipo)}</select><input type="text" data-f="note" value="${esc(s.note)}" placeholder="Nota" aria-label="Nota"></div><span class="val num">${fmtHM(dur(s))}${s.pomo?' ●':''}</span><button class="round" data-del="${s.id}" aria-label="Eliminar sesión">×</button></div>`).join('');
   $('#v-reg').innerHTML=`
   <h1 class="large-title">Registro</h1>
   <p class="subtitle">Horas dedicadas al estudio</p>
@@ -1443,7 +1588,7 @@ $('#v-aju').addEventListener('click',e=>{
     else if(x==='dbxon')showConnect();
     else if(x==='exp')saveFile('estudio_copia_'+todayK()+'.json',JSON.stringify({...S,ui:undefined},null,1),'application/json');
     else if(x==='demo'){if(confirm('Esto sustituye tus datos actuales por tres meses de ejemplo. ¿Continuar?')){demo();toast('Datos de ejemplo cargados')}}
-    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas, fechas clave y fichas?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.fichas={plan:[],edif:[],caso:[],orden:1};S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
+    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas, fechas clave y fichas?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.fichas={plan:[],edif:[],caso:[],segundo:[],orden:1};S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
   }
 });
 
@@ -1459,6 +1604,10 @@ function demo(){
   const keep={temario:S.temario,config:S.config,ui:S.ui,tipos:S.tipos,fichas:S.fichas};
   S=defaults();Object.assign(S,keep);reindex();
   let seed=5;const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
+  if(!S.fichas.segundo.length){
+    const g=(title,cat)=>({id:uid(),title,cat,n:0,lastAt:0,createdAt:Date.now()});
+    S.fichas.segundo=[g('Clasificación y calificación del suelo','urb'),g('Estudio de detalle: contenido','urb'),g('Licencia de primera ocupación','urb'),g('Plan especial de protección','urb'),g('Accesibilidad en edificio existente','edif'),g('CTE DB-SI: evacuación','edif'),g('Rehabilitación y ITE','edif')].sort(ficCmp);
+  }
   const acc={test:0,comp:0},need={test:1.8,comp:1.3},tk=todayK(),pd=PO().study*MIN;
   for(let i=92;i>=1;i--){
     const k=addDays(tk,-i);if(wd(k)===6&&rnd()<.85)continue;if(rnd()<.05)continue;
@@ -1469,7 +1618,7 @@ function demo(){
       const tipo=(i>60||rnd()<.7)?'test':'comp',tp=queue(tipo)[0],full=rnd()<.88,len=full?pd:pd*(.3+rnd()*.4);
       addSession({id:uid(),topicId:tp.id,tipo,start:t,end:t+len,note:'',...(full?{pomo:true}:{})});
       acc[tipo]+=len/HOUR;
-      if(acc[tipo]>=need[tipo]){S.lecturas.push({id:uid(),topicId:tp.id,tipo,ts:t+len});recount();acc[tipo]=0;need[tipo]=(tipo==='test'?1.2:.9)+rnd()*1.2}
+      if(acc[tipo]>=need[tipo]){if(isC(tp.id)){const c=citem(tp.id);c.n=(c.n||0)+1;c.lastAt=t+len}else{S.lecturas.push({id:uid(),topicId:tp.id,tipo,ts:t+len});recount()}acc[tipo]=0;need[tipo]=(tipo==='test'?1.2:.9)+rnd()*1.2}
       t+=len+((j+1)%PO().every===0?PO().long:PO().short)*MIN;
     }
   }
