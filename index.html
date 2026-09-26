@@ -312,6 +312,10 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
 @media (min-width:980px){.grid3{grid-template-columns:repeat(3,1fr)}}
 .fcheck{width:22px;height:22px;flex:none;cursor:pointer;margin:0}
 .ficha .grow{cursor:pointer}
+.chip:disabled{opacity:.35;cursor:default;background:var(--bg);color:var(--ink)}
+.fmove{display:flex;gap:4px;flex:none}
+.fmove .round{width:28px;height:28px;font-size:14px}
+.fmove .round:disabled{opacity:.25;cursor:default;background:var(--bg);color:var(--ink)}
 .ficha.done .ft{text-decoration:line-through;text-decoration-thickness:1px;color:var(--ink-2)}
 .newf{flex-wrap:wrap}
 .newf input[type=text]{flex:1 1 100%}
@@ -446,12 +450,14 @@ const whenTxt=n=>n===0?'Hoy':n===1?'Mañana':n<0?'Hace '+(-n)+' días':'En '+n+'
    lecturas.json, fechas.json y estado.json. */
 const STORE='estudio.datos.v3',STORE_V2='estudio.datos.v2';
 let S,IDX={},CNT={};
+const ficCmp=(a,b)=>String(a.title).localeCompare(String(b.title),'es',{numeric:true,sensitivity:'base'});
+function ficInsert(L,f){const i=L.findIndex(x=>ficCmp(f,x)<0);if(i<0)L.push(f);else L.splice(i,0,f)}
 function defaults(){
   return {
     v:3,
     temario:{blocks:JSON.parse(JSON.stringify(TEMARIO.blocks)),topics:JSON.parse(JSON.stringify(TEMARIO.topics))},
     config:{schedule:[5,5,5,5,5,4,0],pomo:{study:25,short:5,long:15,every:4,autoBreak:true,autoStudy:false,sound:true}},
-    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),fichas:{plan:[],edif:[],caso:[]},
+    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),fichas:{plan:[],edif:[],caso:[],orden:1},
     estado:{mode:'pomo',sel:{topicId:null,tipo:'test'},session:null,pause:null,
       timer:{phase:'estudio',running:false,endsAt:0,remaining:25*MIN,cycle:0,day:''}},
     ui:{theme:'auto',ink:null,bg:null}
@@ -465,9 +471,10 @@ function normalize(d){
   for(const k of Object.keys(D.estado)) if(d.estado[k]==null) d.estado[k]=D.estado[k];
   for(const k of Object.keys(D.ui)) if(d.ui[k]===undefined) d.ui[k]=D.ui[k];
   for(const k of ['plan','edif','caso']) if(!Array.isArray(d.fichas[k])) d.fichas[k]=[];
+  if(!d.fichas.orden){for(const k of ['plan','edif','caso'])d.fichas[k].sort(ficCmp);d.fichas.orden=1} // 1.3: orden alfanumérico inicial
   if(Array.isArray(d.fichas.comp)){ // versión 1.1: "composición" se reparte entre planeamiento y edificación
     const blk=id=>{const t=(d.temario.topics||[]).find(x=>x.id===id);const b=t&&(d.temario.blocks||[]).find(x=>x.id===t.block);return b?b.name:''};
-    for(const x of d.fichas.comp)(/EDIFIC/i.test(blk(x.topicId))?d.fichas.edif:d.fichas.plan).push(x);
+    for(const x of d.fichas.comp)ficInsert(/EDIFIC/i.test(blk(x.topicId))?d.fichas.edif:d.fichas.plan,x);
     delete d.fichas.comp;
   }
   return d;
@@ -1146,11 +1153,12 @@ function renderFic(){
     return `<div class="section-h">${FKIND[k]}</div>
     <div class="strip" style="border-bottom:1px solid var(--ink)"><div class="track" style="margin-top:0"><i style="left:0;width:${pct(nd,all.length)}%;background:var(--ink)"></i></div>
       <div class="mono" style="font-size:12px;text-transform:uppercase">${nd} de ${all.length} hechas${all.length?' · '+pct(nd,all.length)+' %':''}</div></div>
-    <div class="chips">${[['','Todas',all.length],['pend','Pendientes',all.length-nd],['hech','Hechas',nd]].map(([v,l,c])=>`<button class="chip${f===v?' on':''}" data-ff="${v}" data-k="${k}">${l} <span>${c}</span></button>`).join('')}</div>
+    <div class="chips">${[['','Todas',all.length],['pend','Pendientes',all.length-nd],['hech','Hechas',nd]].map(([v,l,c])=>`<button class="chip${f===v?' on':''}" data-ff="${v}" data-k="${k}">${l} <span>${c}</span></button>`).join('')}<button class="chip" data-sort="${k}" style="margin-left:auto" ${all.length<2?'disabled':''}>Ordenar A–Z</button></div>
     <div class="group">
       <div class="cell newf"><input type="text" data-newt="${k}" placeholder="Nueva ficha" aria-label="Título de la nueva ficha"><select data-newtema="${k}" aria-label="Tema de la nueva ficha">${ficTopicOpts('')}</select><button class="btn" data-add="${k}">Añadir</button></div>
-      ${vis.map(x=>{const t=topic(x.topicId);return `<div class="cell ficha${x.done?' done':''}"><input type="checkbox" class="fcheck" data-done="${x.id}" data-k="${k}" ${x.done?'checked':''} aria-label="Marcar ${esc(x.title)} como hecha">
-        <div class="grow" data-edit="${x.id}" data-k="${k}"><div class="ft">${esc(x.title)}</div><div class="sub">${t?'Tema '+t.num+' · '+esc(t.name)+' · ':''}${x.done?'Hecha el '+fmtDMY(dkey(x.doneAt)):'Pendiente'}${x.note?' · '+esc(x.note):''}</div></div></div>`}).join('')}
+      ${vis.map((x,vi)=>{const t=topic(x.topicId);return `<div class="cell ficha${x.done?' done':''}"><input type="checkbox" class="fcheck" data-done="${x.id}" data-k="${k}" ${x.done?'checked':''} aria-label="Marcar ${esc(x.title)} como hecha">
+        <div class="grow" data-edit="${x.id}" data-k="${k}"><div class="ft">${esc(x.title)}</div><div class="sub">${t?'Tema '+t.num+' · '+esc(t.name)+' · ':''}${x.done?'Hecha el '+fmtDMY(dkey(x.doneAt)):'Pendiente'}${x.note?' · '+esc(x.note):''}</div></div>
+        <span class="fmove"><button class="round" data-mv="-1" data-id="${x.id}" data-k="${k}" aria-label="Subir ${esc(x.title)}" ${vi===0?'disabled':''}>↑</button><button class="round" data-mv="1" data-id="${x.id}" data-k="${k}" aria-label="Bajar ${esc(x.title)}" ${vi===vis.length-1?'disabled':''}>↓</button></span></div>`}).join('')}
       ${!all.length?'<div class="empty">Aún no hay fichas de '+FNAME[k].toLowerCase()+'. Escribe el título arriba y pulsa Añadir.</div>':!vis.length?'<div class="empty">Ninguna ficha en este filtro.</div>':''}
     </div>`;
   };
@@ -1158,17 +1166,21 @@ function renderFic(){
   <h1 class="large-title">Fichas</h1>
   <p class="subtitle">${Object.keys(FKIND).map(k=>FNAME[k]+': '+sum(k)).join(' · ')}</p>
   <div class="grid3">${Object.keys(FKIND).map(k=>`<div>${list(k)}</div>`).join('')}</div>
-  <p class="section-f">Marca la casilla cuando termines una ficha. Pulsa una ficha para cambiarle el título, el tema o la nota, pasarla a otra lista o borrarla.</p>`;
+  <p class="section-f">Marca la casilla cuando termines una ficha. Las fichas nuevas entran en orden alfanumérico; con ↑ y ↓ las colocas a mano. Pulsa una ficha para cambiarle el título, el tema o la nota, pasarla a otra lista o borrarla.</p>`;
 }
 function addFicha(k){
   const inp=document.querySelector(`[data-newt="${k}"]`),title=inp.value.trim();
   if(!title){inp.focus();toast('Escribe el título de la ficha');return}
   const topicId=document.querySelector(`[data-newtema="${k}"]`).value;
-  S.fichas[k].push({id:uid(),title,topicId,note:'',done:false,doneAt:0,createdAt:Date.now()});
+  ficInsert(S.fichas[k],{id:uid(),title,topicId,note:'',done:false,doneAt:0,createdAt:Date.now()});
   save();renderFic();document.querySelector(`[data-newt="${k}"]`).focus();
 }
 $('#v-fic').addEventListener('click',e=>{
   const ad=e.target.closest('[data-add]'),ff=e.target.closest('[data-ff]'),ed=e.target.closest('[data-edit]');
+  const mv=e.target.closest('[data-mv]'),so=e.target.closest('[data-sort]');
+  if(mv){moveFicha(mv.dataset.k,mv.dataset.id,+mv.dataset.mv);return}
+  if(so){const k=so.dataset.sort,prev=S.fichas[k].slice();S.fichas[k].sort(ficCmp);save();renderFic();
+    toast(FNAME[k]+' ordenada de la A a la Z','Deshacer',()=>{S.fichas[k]=prev;save();renderFic()});return}
   if(ad)addFicha(ad.dataset.add);
   else if(ff){FICF[ff.dataset.k]=ff.dataset.ff;renderFic()}
   else if(ed)openFicha(ed.dataset.k,ed.dataset.edit);
@@ -1180,6 +1192,16 @@ $('#v-fic').addEventListener('change',e=>{
   if(d.checked)toast('Ficha hecha: '+f.title);
 });
 $('#v-fic').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset.newt){e.preventDefault();addFicha(e.target.dataset.newt)}});
+function moveFicha(k,id,dir){
+  // con un filtro activo, se intercambia con la ficha visible de al lado
+  const L=S.fichas[k],f=FICF[k],ok=x=>!f||(f==='pend'&&!x.done)||(f==='hech'&&x.done);
+  const i=L.findIndex(x=>x.id===id);if(i<0)return;
+  let j=i+dir;while(j>=0&&j<L.length&&!ok(L[j]))j+=dir;
+  if(j<0||j>=L.length)return;
+  const [it]=L.splice(i,1);L.splice(j,0,it);
+  save();renderFic();
+  const b=document.querySelector(`[data-mv="${dir}"][data-id="${id}"]`);if(b&&!b.disabled)b.focus();
+}
 let FED=null;
 function openFicha(k,id){
   const f=S.fichas[k].find(x=>x.id===id);if(!f)return;FED={k,id};
@@ -1194,7 +1216,7 @@ $('#fiSave').onclick=()=>{
   Object.assign(f,{title:t,topicId:$('#fiTopic').value,note:$('#fiNote').value.trim()});
   if(done!==f.done){f.done=done;f.doneAt=done?Date.now():0}
   const to=$('#fiCat').value;let msg='Ficha guardada';
-  if(to!==FED.k&&S.fichas[to]){const L=S.fichas[FED.k];L.splice(L.indexOf(f),1);S.fichas[to].push(f);msg='Ficha movida a '+FNAME[to]}
+  if(to!==FED.k&&S.fichas[to]){const L=S.fichas[FED.k];L.splice(L.indexOf(f),1);ficInsert(S.fichas[to],f);msg='Ficha movida a '+FNAME[to]}
   save();$('#fiDlg').close();renderFic();toast(msg);
 };
 $('#fiDel').onclick=()=>{
@@ -1421,7 +1443,7 @@ $('#v-aju').addEventListener('click',e=>{
     else if(x==='dbxon')showConnect();
     else if(x==='exp')saveFile('estudio_copia_'+todayK()+'.json',JSON.stringify({...S,ui:undefined},null,1),'application/json');
     else if(x==='demo'){if(confirm('Esto sustituye tus datos actuales por tres meses de ejemplo. ¿Continuar?')){demo();toast('Datos de ejemplo cargados')}}
-    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas, fechas clave y fichas?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.fichas={plan:[],edif:[],caso:[]};S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
+    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas, fechas clave y fichas?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.fichas={plan:[],edif:[],caso:[],orden:1};S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
   }
 });
 
@@ -1458,6 +1480,7 @@ function demo(){
     S.fichas.plan=[f('Esquema TRLSRU: clases de suelo','t24',true),f('Planeamiento general: contenido y tramitación','t30',false),f('Plan parcial y plan especial','t32',false)];
     S.fichas.edif=[f('CTE seguridad en caso de incendio','t64',true),f('Accesibilidad: ordenanza y CTE DB-SUA','t75',false)];
     S.fichas.caso=[f('Caso: licencia de obra mayor con PGOUM','t59',true),f('Caso: expediente de disciplina urbanística','t41',false),f('Caso: accesibilidad en edificio existente','t75',false)];
+    for(const k of ['plan','edif','caso'])S.fichas[k].sort(ficCmp);
   }
   S.eventos=[
     {id:uid(),type:T('examen'),title:'Primer ejercicio',date:addDays(tk,68),time:'09:00',note:'Llevar DNI y bolígrafo azul'},
