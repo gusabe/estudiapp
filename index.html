@@ -297,6 +297,21 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
 .dlgmsg{padding:10px 14px}
 .cell .rrow{flex:1 1 auto}
 #dock .dock-bar button:disabled{opacity:.35;cursor:default;background:var(--bg);color:var(--ink)}
+/* vueltas al temario */
+.vbig{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+.vbig .clock{margin:0}
+.vrow{display:grid;grid-template-columns:30px 1fr 66px;gap:10px;align-items:center;font:400 12px/1.4 var(--mono)}
+.vrow+.vrow{margin-top:6px}
+.vrow .track{margin:0;height:14px}
+.vrow .r{text-align:right}
+.vrow.cur span:first-child{background:var(--ink);color:var(--on-ink);text-align:center}
+/* fichas */
+.fcheck{width:22px;height:22px;flex:none;cursor:pointer;margin:0}
+.ficha .grow{cursor:pointer}
+.ficha.done .ft{text-decoration:line-through;text-decoration-thickness:1px;color:var(--ink-2)}
+.newf{flex-wrap:wrap}
+.newf input[type=text]{flex:1 1 180px}
+.newf select{max-width:170px}
 @media (max-width:700px){
   .ctr .lb{display:none}
   .tcell{flex-wrap:wrap}
@@ -314,6 +329,7 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
     <nav id="tabbar">
       <button data-v="hoy">Hoy</button><span class="dotsep">•</span>
       <button data-v="tem">Temario</button><span class="dotsep">•</span>
+      <button data-v="fic">Fichas</button><span class="dotsep">•</span>
       <button data-v="cal">Calendario</button><span class="dotsep">•</span>
       <button data-v="reg">Registro</button><span class="dotsep">•</span>
       <button data-v="aju">Ajustes</button>
@@ -327,6 +343,7 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
 <main id="main">
   <section id="v-hoy" hidden></section>
   <section id="v-tem" hidden></section>
+  <section id="v-fic" hidden></section>
   <section id="v-cal" hidden></section>
   <section id="v-reg" hidden></section>
   <section id="v-aju" hidden></section>
@@ -348,6 +365,19 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
 
 <div id="toast" role="status" aria-live="polite"><span id="tmsg"></span><button id="tact" hidden></button></div>
 
+<dialog id="fiDlg" aria-labelledby="fiH">
+  <div class="sheet-head"><button class="btn plain" id="fiCancel" type="button">Cancelar</button><h2 id="fiH">Ficha</h2><button class="btn plain" id="fiSave" type="button">Guardar</button></div>
+  <div class="sheet-body">
+    <div class="section-h" id="fiKind">Ficha</div>
+    <div class="group">
+      <label class="cell"><span class="grow">Título</span><input type="text" id="fiTitle" style="width:60%"></label>
+      <label class="cell"><span class="grow">Tema</span><select id="fiTopic" style="max-width:60%"></select></label>
+      <label class="cell"><span class="grow">Nota</span><input type="text" id="fiNote" placeholder="Opcional" style="width:60%"></label>
+      <label class="cell"><span class="grow">Hecha</span><input type="checkbox" class="switch" id="fiDone"></label>
+    </div>
+    <div style="padding:14px 14px 0"><button class="btn danger" id="fiDel" type="button">Borrar esta ficha</button></div>
+  </div>
+</dialog>
 <dialog id="evDlg" aria-labelledby="evTitle">
   <div class="sheet-head"><button class="btn plain" id="evCancel" type="button">Cancelar</button><h2 id="evTitle">Nueva fecha</h2><button class="btn plain" id="evSave" type="button">Guardar</button></div>
   <div class="sheet-body">
@@ -416,7 +446,7 @@ function defaults(){
     v:3,
     temario:{blocks:JSON.parse(JSON.stringify(TEMARIO.blocks)),topics:JSON.parse(JSON.stringify(TEMARIO.topics))},
     config:{schedule:[5,5,5,5,5,4,0],pomo:{study:25,short:5,long:15,every:4,autoBreak:true,autoStudy:false,sound:true}},
-    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),
+    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),fichas:{comp:[],caso:[]},
     estado:{mode:'pomo',sel:{topicId:null,tipo:'test'},session:null,pause:null,
       timer:{phase:'estudio',running:false,endsAt:0,remaining:25*MIN,cycle:0,day:''}},
     ui:{theme:'auto',ink:null,bg:null}
@@ -429,6 +459,7 @@ function normalize(d){
   for(const k of Object.keys(D.config.pomo)) if(d.config.pomo[k]==null) d.config.pomo[k]=D.config.pomo[k];
   for(const k of Object.keys(D.estado)) if(d.estado[k]==null) d.estado[k]=D.estado[k];
   for(const k of Object.keys(D.ui)) if(d.ui[k]===undefined) d.ui[k]=D.ui[k];
+  for(const k of ['comp','caso']) if(!Array.isArray(d.fichas[k])) d.fichas[k]=[];
   return d;
 }
 function fromV2(o){
@@ -452,13 +483,13 @@ function load(){
   reindex();
 }
 function toFiles(d){
-  const f={'config/temario':d.temario,'config/ajustes':d.config,'fechas':{tipos:d.tipos,eventos:d.eventos},'lecturas':{lecturas:d.lecturas},'estado':d.estado};
+  const f={'config/temario':d.temario,'config/ajustes':d.config,'fechas':{tipos:d.tipos,eventos:d.eventos},'lecturas':{lecturas:d.lecturas},'fichas':d.fichas,'estado':d.estado};
   for(const [m,o] of Object.entries(d.meses)) f['estudio/'+m]=o;
   return f;
 }
 function fromFiles(files){
   const d={v:3,temario:files['config/temario'],config:files['config/ajustes'],meses:{},
-    lecturas:files['lecturas']?.lecturas,eventos:files['fechas']?.eventos,tipos:files['fechas']?.tipos,estado:files['estado'],ui:{...defaults().ui,...(loadUI()||{})}};
+    lecturas:files['lecturas']?.lecturas,eventos:files['fechas']?.eventos,tipos:files['fechas']?.tipos,estado:files['estado'],fichas:files['fichas'],ui:{...defaults().ui,...(loadUI()||{})}};
   for(const [n,o] of Object.entries(files)) if(n.startsWith('estudio/')&&o&&o.days) d.meses[n.slice(8)]=o;
   return normalize(d);
 }
@@ -515,7 +546,7 @@ function trayUpdate(text){
 const DBX_KEY='twbjbzwshth63tz';
 const DBX={on:false,tok:null,root:'',revs:{},last:{},fresh:false,busy:false,again:false,timer:0,status:'',syncAt:0,link:''};
 const DBXTOK='estudio.dbx.token',DBXCACHE='estudio.dbx.cache',DBXVER='estudio.dbx.verifier',SOLO='estudio.solo-local';
-const validName=n=>/^(config\/(temario|ajustes)|fechas|lecturas|estado|estudio\/\d{4}-\d{2})$/.test(n);
+const validName=n=>/^(config\/(temario|ajustes)|fechas|lecturas|fichas|estado|estudio\/\d{4}-\d{2})$/.test(n);
 function dbxLoadTok(){try{DBX.tok=JSON.parse(localStorage.getItem(DBXTOK)||'null')}catch(e){}return !!(DBX.tok&&DBX.tok.refresh)}
 function dbxSaveTok(){try{localStorage.setItem(DBXTOK,JSON.stringify(DBX.tok))}catch(e){}}
 function dbxSaveCache(){try{localStorage.setItem(DBXCACHE,JSON.stringify({S:{...S,ui:undefined},last:DBX.last,revs:DBX.revs,root:DBX.root,syncAt:DBX.syncAt}))}catch(e){}}
@@ -898,7 +929,7 @@ function show(v){
   document.querySelectorAll('main>section').forEach(s=>s.hidden=s.id!=='v-'+v);
   renderView();scrollTo(0,0);
 }
-function renderView(){if(VIEW==='dbx')return;({hoy:renderHoy,tem:renderTem,cal:renderCal,reg:renderReg,aju:renderAju})[VIEW]()}
+function renderView(){if(VIEW==='dbx')return;({hoy:renderHoy,tem:renderTem,fic:renderFic,cal:renderCal,reg:renderReg,aju:renderAju})[VIEW]()}
 function renderAll(){renderChrome();renderView()}
 
 function topicOptions(sel){
@@ -970,6 +1001,23 @@ function eventCell(e){
   return `<button class="cell" data-ev="${e.id}"><span class="dotc" style="background:${ft.color};border-color:${ft.color}"></span><div class="grow"><div>${esc(evLabel(e))}</div><div class="sub">${esc(ft.name)} · ${fmtLong(e.date)}${e.time?' · '+e.time:''}${e.note?' · '+esc(e.note):''}</div></div><span class="val">${whenTxt(n)}</span></button>`;
 }
 
+/* ---------- vueltas al temario ---------- */
+let VTIPO=null;
+function vueltasHTML(){
+  const ti=VTIPO||currentSel().tipo,T=S.temario.topics,n=T.length;
+  const cs=T.map(t=>cnt(t.id,ti)),cur=Math.min(...cs)+1,top=Math.max(cur,...cs);
+  const done=k=>cs.filter(c=>c>=k).length;
+  let rows='';
+  for(let k=Math.max(1,top-5);k<=top;k++){const d=done(k);
+    rows+=`<div class="vrow${k===cur?' cur':''}"><span>${pad(k)}</span><div class="track"><i style="left:0;width:${pct(d,n)}%;background:var(--ink)"></i></div><span class="r num">${d===n?'Hecha':d+'/'+n}</span></div>`}
+  const dc=done(cur);
+  return `<div class="seg">${TIPOS.map(x=>`<button data-vt="${x.id}" aria-pressed="${ti===x.id}">${x.name}</button>`).join('')}</div>
+  <div class="strip" style="border-bottom:1px solid var(--ink)">
+    <div class="vbig"><span class="tl">Vuelta</span><span class="clock md num">${pad(cur)}</span><span class="mono" style="font-size:12px;text-transform:uppercase">${dc} de ${n} temas · ${pct(dc,n)} %</span></div>
+    ${rows}
+  </div>`;
+}
+
 /* ---------- HOY ---------- */
 function renderHoy(){
   const k=todayK(),tot=totalOn(k),g=goalOn(k),list=sessionsOn(k),sel=currentSel(),t=topic(sel.topicId),I=timerInfo(),pomo=isPomo();
@@ -1007,6 +1055,8 @@ function renderHoy(){
         ${t?`<div class="cell"><div class="grow"><div>Lecturas del tema ${t.num}</div><div class="sub">Test ${pad(cnt(t.id,'test'))} · Composición ${pad(cnt(t.id,'comp'))} · ${fmtHM(TT[t.id]?.ms||0)} estudiadas</div></div><button class="btn" data-a="plus">+1 ${tipoName(sel.tipo)}</button></div>`:''}
         ${sel.manual&&!S.estado.session&&q[0]&&q[0].id!==sel.topicId?`<button class="cell act" data-a="follow">Volver al orden: tema ${q[0].num}</button>`:''}
       </div>
+      <div class="section-h">Vueltas al temario</div>
+      ${vueltasHTML()}
       <div class="section-h">Siguientes en ${tipoName(sel.tipo).toLowerCase()}</div>
       <div class="chips">${q.map(x=>`<button class="chip${x.id===sel.topicId?' on':''}" data-tid="${x.id}">${x.num} <span>${esc(x.name)}</span></button>`).join('')}</div>
     </div>
@@ -1022,6 +1072,8 @@ function renderHoy(){
 }
 $('#v-hoy').addEventListener('click',e=>{
   const a=e.target.closest('[data-a]'),m=e.target.closest('[data-mode]'),ti=e.target.closest('[data-tipo]'),tn=e.target.closest('[data-tid]'),ev=e.target.closest('[data-ev]');
+  const vt=e.target.closest('[data-vt]');
+  if(vt){VTIPO=vt.dataset.vt;renderHoy();return}
   if(a){const x=a.dataset.a,sel=currentSel();
     if(x==='play')toggle();else if(x==='stop')stop();else if(x==='skip')skip();
     else if(x==='plus'){addLectura(sel.topicId,sel.tipo);renderAll();const t=topic(sel.topicId);toast('Tema '+t.num+': '+cnt(t.id,sel.tipo)+' lecturas de '+tipoName(sel.tipo).toLowerCase(),'Deshacer',()=>{removeLectura(t.id,sel.tipo);renderAll()})}
@@ -1070,6 +1122,72 @@ $('#v-tem').addEventListener('click',e=>{
   else if(f){TEMF.f=TEMF.f===f.dataset.f?'':f.dataset.f;renderTem()}
 });
 $('#v-tem').addEventListener('input',e=>{if(e.target.id==='tq'){TEMF.q=e.target.value;const p=e.target.selectionStart;renderTem();const i=$('#tq');i.focus();i.setSelectionRange(p,p)}});
+
+/* ---------- FICHAS ---------- */
+const FKIND={comp:'Fichas de composición',caso:'Fichas caso práctico'};
+const FICF={comp:'',caso:''};
+function ficTopicOpts(sel){return `<option value="">Sin tema</option>`+topicOptions(sel)}
+function renderFic(){
+  const F=S.fichas,sum=k=>`${F[k].filter(f=>f.done).length} de ${F[k].length} hechas`;
+  const list=k=>{
+    const all=F[k],nd=all.filter(f=>f.done).length,f=FICF[k];
+    const vis=all.filter(x=>!f||(f==='pend'&&!x.done)||(f==='hech'&&x.done));
+    return `<div class="section-h">${FKIND[k]}</div>
+    <div class="strip" style="border-bottom:1px solid var(--ink)"><div class="track" style="margin-top:0"><i style="left:0;width:${pct(nd,all.length)}%;background:var(--ink)"></i></div>
+      <div class="mono" style="font-size:12px;text-transform:uppercase">${nd} de ${all.length} hechas${all.length?' · '+pct(nd,all.length)+' %':''}</div></div>
+    <div class="chips">${[['','Todas',all.length],['pend','Pendientes',all.length-nd],['hech','Hechas',nd]].map(([v,l,c])=>`<button class="chip${f===v?' on':''}" data-ff="${v}" data-k="${k}">${l} <span>${c}</span></button>`).join('')}</div>
+    <div class="group">
+      <div class="cell newf"><input type="text" data-newt="${k}" placeholder="Nueva ficha" aria-label="Título de la nueva ficha"><select data-newtema="${k}" aria-label="Tema de la nueva ficha">${ficTopicOpts('')}</select><button class="btn" data-add="${k}">Añadir</button></div>
+      ${vis.map(x=>{const t=topic(x.topicId);return `<div class="cell ficha${x.done?' done':''}"><input type="checkbox" class="fcheck" data-done="${x.id}" data-k="${k}" ${x.done?'checked':''} aria-label="Marcar ${esc(x.title)} como hecha">
+        <div class="grow" data-edit="${x.id}" data-k="${k}"><div class="ft">${esc(x.title)}</div><div class="sub">${t?'Tema '+t.num+' · '+esc(t.name)+' · ':''}${x.done?'Hecha el '+fmtDMY(dkey(x.doneAt)):'Pendiente'}${x.note?' · '+esc(x.note):''}</div></div></div>`}).join('')}
+      ${!all.length?'<div class="empty">Aún no hay fichas. Escribe el título arriba y pulsa Añadir.</div>':!vis.length?'<div class="empty">Ninguna ficha en este filtro.</div>':''}
+    </div>`;
+  };
+  $('#v-fic').innerHTML=`
+  <h1 class="large-title">Fichas</h1>
+  <p class="subtitle">Composición: ${sum('comp')} · Caso práctico: ${sum('caso')}</p>
+  <div class="grid2"><div>${list('comp')}</div><div>${list('caso')}</div></div>
+  <p class="section-f">Marca la casilla cuando termines una ficha. Pulsa una ficha para cambiar el título, el tema o la nota, o para borrarla.</p>`;
+}
+function addFicha(k){
+  const inp=document.querySelector(`[data-newt="${k}"]`),title=inp.value.trim();
+  if(!title){inp.focus();toast('Escribe el título de la ficha');return}
+  const topicId=document.querySelector(`[data-newtema="${k}"]`).value;
+  S.fichas[k].push({id:uid(),title,topicId,note:'',done:false,doneAt:0,createdAt:Date.now()});
+  save();renderFic();document.querySelector(`[data-newt="${k}"]`).focus();
+}
+$('#v-fic').addEventListener('click',e=>{
+  const ad=e.target.closest('[data-add]'),ff=e.target.closest('[data-ff]'),ed=e.target.closest('[data-edit]');
+  if(ad)addFicha(ad.dataset.add);
+  else if(ff){FICF[ff.dataset.k]=ff.dataset.ff;renderFic()}
+  else if(ed)openFicha(ed.dataset.k,ed.dataset.edit);
+});
+$('#v-fic').addEventListener('change',e=>{
+  const d=e.target.closest('[data-done]');if(!d)return;
+  const f=S.fichas[d.dataset.k].find(x=>x.id===d.dataset.done);if(!f)return;
+  f.done=d.checked;f.doneAt=d.checked?Date.now():0;save();renderFic();
+  if(d.checked)toast('Ficha hecha: '+f.title);
+});
+$('#v-fic').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset.newt){e.preventDefault();addFicha(e.target.dataset.newt)}});
+let FED=null;
+function openFicha(k,id){
+  const f=S.fichas[k].find(x=>x.id===id);if(!f)return;FED={k,id};
+  $('#fiKind').textContent=FKIND[k];$('#fiTitle').value=f.title;$('#fiTopic').innerHTML=ficTopicOpts(f.topicId);$('#fiNote').value=f.note||'';$('#fiDone').checked=!!f.done;
+  $('#fiDlg').showModal();
+}
+$('#fiCancel').onclick=()=>$('#fiDlg').close();
+$('#fiSave').onclick=()=>{
+  const f=S.fichas[FED.k].find(x=>x.id===FED.id);if(!f)return;
+  const t=$('#fiTitle').value.trim();if(!t){toast('La ficha necesita un título');return}
+  const done=$('#fiDone').checked;
+  Object.assign(f,{title:t,topicId:$('#fiTopic').value,note:$('#fiNote').value.trim()});
+  if(done!==f.done){f.done=done;f.doneAt=done?Date.now():0}
+  save();$('#fiDlg').close();renderFic();toast('Ficha guardada');
+};
+$('#fiDel').onclick=()=>{
+  const L=S.fichas[FED.k],i=L.findIndex(x=>x.id===FED.id);if(i<0)return;const[rm]=L.splice(i,1),k=FED.k;
+  save();$('#fiDlg').close();renderFic();toast('Ficha borrada','Deshacer',()=>{S.fichas[k].splice(i,0,rm);save();renderFic()});
+};
 
 /* ---------- CALENDARIO ---------- */
 let CAL0=todayK().slice(0,7);
@@ -1258,7 +1376,7 @@ function renderAju(){
     <button class="cell act" data-a="exp">Exportar copia de seguridad</button>
     <label class="cell act" style="cursor:pointer">Importar copia de seguridad<input type="file" id="bimp" accept=".json,application/json" hidden></label>
     <button class="cell act" data-a="demo">Cargar datos de ejemplo</button>
-    <div class="cell"><span class="grow">Borrar sesiones, lecturas y fechas<div class="sub">El temario y los ajustes se mantienen</div></span><button class="btn danger" data-a="wipe">Borrar</button></div>
+    <div class="cell"><span class="grow">Borrar sesiones, lecturas, fechas y fichas<div class="sub">El temario y los ajustes se mantienen</div></span><button class="btn danger" data-a="wipe">Borrar</button></div>
   </div>
   <p class="section-f">${DBX.on?'Los datos se guardan en tu Dropbox y se comparten con el PC y tus otros aparatos. Los colores y el modo claro u oscuro son de cada aparato.':API.on?'Los datos se guardan en la carpeta datos junto a Estudio.exe; Dropbox los sincroniza. Los colores y el modo claro u oscuro son de cada ordenador.':'Esta página guarda los datos en este navegador. Con Estudio.exe se guardan en la carpeta datos de Dropbox.'}</p>`;
   if(API.on)fetch('/api/system',{cache:'no-store'}).then(r=>r.json()).then(j=>{const sw=$('#autoSw');if(!sw)return;sw.checked=!!j.autostart;sw.disabled=!j.canAutostart}).catch(()=>{});
@@ -1290,7 +1408,7 @@ $('#v-aju').addEventListener('click',e=>{
     else if(x==='dbxon')showConnect();
     else if(x==='exp')saveFile('estudio_copia_'+todayK()+'.json',JSON.stringify({...S,ui:undefined},null,1),'application/json');
     else if(x==='demo'){if(confirm('Esto sustituye tus datos actuales por tres meses de ejemplo. ¿Continuar?')){demo();toast('Datos de ejemplo cargados')}}
-    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas y fechas clave?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
+    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas, fechas clave y fichas?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.fichas={comp:[],caso:[]};S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
   }
 });
 
@@ -1303,7 +1421,7 @@ async function saveFile(name,text,mime){
 
 /* ---------- datos de ejemplo ---------- */
 function demo(){
-  const keep={temario:S.temario,config:S.config,ui:S.ui,tipos:S.tipos};
+  const keep={temario:S.temario,config:S.config,ui:S.ui,tipos:S.tipos,fichas:S.fichas};
   S=defaults();Object.assign(S,keep);reindex();
   let seed=5;const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
   const acc={test:0,comp:0},need={test:1.8,comp:1.3},tk=todayK(),pd=PO().study*MIN;
@@ -1322,6 +1440,11 @@ function demo(){
   }
   const nx=w=>{let k=addDays(tk,1);while(wd(k)!==w)k=addDays(k,1);return k};
   const T=id=>S.tipos.some(t=>t.id===id)?id:S.tipos[0].id;
+  if(!S.fichas.comp.length&&!S.fichas.caso.length){
+    const f=(title,topicId,done)=>({id:uid(),title,topicId,note:'',done,doneAt:done?Date.now()-86400000*(3+Math.floor(rnd()*20)):0,createdAt:Date.now()});
+    S.fichas.comp=[f('Estructura tipo del tema de urbanismo','t24',true),f('Esquema TRLSRU: clases de suelo','t24',true),f('Planeamiento general: contenido y tramitación','t30',false),f('Licencias urbanísticas en Madrid','t59',false)];
+    S.fichas.caso=[f('Caso: licencia de obra mayor con PGOUM','t59',true),f('Caso: expediente de disciplina urbanística','t41',false),f('Caso: accesibilidad en edificio existente','t75',false)];
+  }
   S.eventos=[
     {id:uid(),type:T('examen'),title:'Primer ejercicio',date:addDays(tk,68),time:'09:00',note:'Llevar DNI y bolígrafo azul'},
     {id:uid(),type:T('tutoria'),title:'Tutoría bloque PGOUM',date:nx(1),time:'18:00',note:''},
