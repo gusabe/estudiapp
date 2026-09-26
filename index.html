@@ -306,12 +306,16 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
 .vrow .r{text-align:right}
 .vrow.cur span:first-child{background:var(--ink);color:var(--on-ink);text-align:center}
 /* fichas */
+.grid3{display:grid;grid-template-columns:1fr;gap:1px;background:var(--ink);border-bottom:1px solid var(--ink)}
+.grid3>*{background:var(--bg);min-width:0}
+.grid3 .group:last-child{border-bottom:0}
+@media (min-width:980px){.grid3{grid-template-columns:repeat(3,1fr)}}
 .fcheck{width:22px;height:22px;flex:none;cursor:pointer;margin:0}
 .ficha .grow{cursor:pointer}
 .ficha.done .ft{text-decoration:line-through;text-decoration-thickness:1px;color:var(--ink-2)}
 .newf{flex-wrap:wrap}
-.newf input[type=text]{flex:1 1 180px}
-.newf select{max-width:170px}
+.newf input[type=text]{flex:1 1 100%}
+.newf select{flex:1 1 auto;max-width:none}
 @media (max-width:700px){
   .ctr .lb{display:none}
   .tcell{flex-wrap:wrap}
@@ -370,6 +374,7 @@ html{scroll-padding-top:calc(110px + env(safe-area-inset-top,0px))}
   <div class="sheet-body">
     <div class="section-h" id="fiKind">Ficha</div>
     <div class="group">
+      <label class="cell"><span class="grow">Lista</span><select id="fiCat"><option value="plan">1 · Planeamiento</option><option value="edif">2 · Edificación</option><option value="caso">3 · Caso práctico</option></select></label>
       <label class="cell"><span class="grow">Título</span><input type="text" id="fiTitle" style="width:60%"></label>
       <label class="cell"><span class="grow">Tema</span><select id="fiTopic" style="max-width:60%"></select></label>
       <label class="cell"><span class="grow">Nota</span><input type="text" id="fiNote" placeholder="Opcional" style="width:60%"></label>
@@ -446,7 +451,7 @@ function defaults(){
     v:3,
     temario:{blocks:JSON.parse(JSON.stringify(TEMARIO.blocks)),topics:JSON.parse(JSON.stringify(TEMARIO.topics))},
     config:{schedule:[5,5,5,5,5,4,0],pomo:{study:25,short:5,long:15,every:4,autoBreak:true,autoStudy:false,sound:true}},
-    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),fichas:{comp:[],caso:[]},
+    meses:{},lecturas:[],eventos:[],tipos:JSON.parse(JSON.stringify(TIPOS_FECHA)),fichas:{plan:[],edif:[],caso:[]},
     estado:{mode:'pomo',sel:{topicId:null,tipo:'test'},session:null,pause:null,
       timer:{phase:'estudio',running:false,endsAt:0,remaining:25*MIN,cycle:0,day:''}},
     ui:{theme:'auto',ink:null,bg:null}
@@ -459,7 +464,12 @@ function normalize(d){
   for(const k of Object.keys(D.config.pomo)) if(d.config.pomo[k]==null) d.config.pomo[k]=D.config.pomo[k];
   for(const k of Object.keys(D.estado)) if(d.estado[k]==null) d.estado[k]=D.estado[k];
   for(const k of Object.keys(D.ui)) if(d.ui[k]===undefined) d.ui[k]=D.ui[k];
-  for(const k of ['comp','caso']) if(!Array.isArray(d.fichas[k])) d.fichas[k]=[];
+  for(const k of ['plan','edif','caso']) if(!Array.isArray(d.fichas[k])) d.fichas[k]=[];
+  if(Array.isArray(d.fichas.comp)){ // versión 1.1: "composición" se reparte entre planeamiento y edificación
+    const blk=id=>{const t=(d.temario.topics||[]).find(x=>x.id===id);const b=t&&(d.temario.blocks||[]).find(x=>x.id===t.block);return b?b.name:''};
+    for(const x of d.fichas.comp)(/EDIFIC/i.test(blk(x.topicId))?d.fichas.edif:d.fichas.plan).push(x);
+    delete d.fichas.comp;
+  }
   return d;
 }
 function fromV2(o){
@@ -1124,8 +1134,9 @@ $('#v-tem').addEventListener('click',e=>{
 $('#v-tem').addEventListener('input',e=>{if(e.target.id==='tq'){TEMF.q=e.target.value;const p=e.target.selectionStart;renderTem();const i=$('#tq');i.focus();i.setSelectionRange(p,p)}});
 
 /* ---------- FICHAS ---------- */
-const FKIND={comp:'Fichas de composición',caso:'Fichas caso práctico'};
-const FICF={comp:'',caso:''};
+const FKIND={plan:'1 · Planeamiento',edif:'2 · Edificación',caso:'3 · Caso práctico'};
+const FNAME={plan:'Planeamiento',edif:'Edificación',caso:'Caso práctico'};
+const FICF={plan:'',edif:'',caso:''};
 function ficTopicOpts(sel){return `<option value="">Sin tema</option>`+topicOptions(sel)}
 function renderFic(){
   const F=S.fichas,sum=k=>`${F[k].filter(f=>f.done).length} de ${F[k].length} hechas`;
@@ -1140,14 +1151,14 @@ function renderFic(){
       <div class="cell newf"><input type="text" data-newt="${k}" placeholder="Nueva ficha" aria-label="Título de la nueva ficha"><select data-newtema="${k}" aria-label="Tema de la nueva ficha">${ficTopicOpts('')}</select><button class="btn" data-add="${k}">Añadir</button></div>
       ${vis.map(x=>{const t=topic(x.topicId);return `<div class="cell ficha${x.done?' done':''}"><input type="checkbox" class="fcheck" data-done="${x.id}" data-k="${k}" ${x.done?'checked':''} aria-label="Marcar ${esc(x.title)} como hecha">
         <div class="grow" data-edit="${x.id}" data-k="${k}"><div class="ft">${esc(x.title)}</div><div class="sub">${t?'Tema '+t.num+' · '+esc(t.name)+' · ':''}${x.done?'Hecha el '+fmtDMY(dkey(x.doneAt)):'Pendiente'}${x.note?' · '+esc(x.note):''}</div></div></div>`}).join('')}
-      ${!all.length?'<div class="empty">Aún no hay fichas. Escribe el título arriba y pulsa Añadir.</div>':!vis.length?'<div class="empty">Ninguna ficha en este filtro.</div>':''}
+      ${!all.length?'<div class="empty">Aún no hay fichas de '+FNAME[k].toLowerCase()+'. Escribe el título arriba y pulsa Añadir.</div>':!vis.length?'<div class="empty">Ninguna ficha en este filtro.</div>':''}
     </div>`;
   };
   $('#v-fic').innerHTML=`
   <h1 class="large-title">Fichas</h1>
-  <p class="subtitle">Composición: ${sum('comp')} · Caso práctico: ${sum('caso')}</p>
-  <div class="grid2"><div>${list('comp')}</div><div>${list('caso')}</div></div>
-  <p class="section-f">Marca la casilla cuando termines una ficha. Pulsa una ficha para cambiar el título, el tema o la nota, o para borrarla.</p>`;
+  <p class="subtitle">${Object.keys(FKIND).map(k=>FNAME[k]+': '+sum(k)).join(' · ')}</p>
+  <div class="grid3">${Object.keys(FKIND).map(k=>`<div>${list(k)}</div>`).join('')}</div>
+  <p class="section-f">Marca la casilla cuando termines una ficha. Pulsa una ficha para cambiarle el título, el tema o la nota, pasarla a otra lista o borrarla.</p>`;
 }
 function addFicha(k){
   const inp=document.querySelector(`[data-newt="${k}"]`),title=inp.value.trim();
@@ -1172,7 +1183,7 @@ $('#v-fic').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset.
 let FED=null;
 function openFicha(k,id){
   const f=S.fichas[k].find(x=>x.id===id);if(!f)return;FED={k,id};
-  $('#fiKind').textContent=FKIND[k];$('#fiTitle').value=f.title;$('#fiTopic').innerHTML=ficTopicOpts(f.topicId);$('#fiNote').value=f.note||'';$('#fiDone').checked=!!f.done;
+  $('#fiKind').textContent=FKIND[k];$('#fiCat').value=k;$('#fiTitle').value=f.title;$('#fiTopic').innerHTML=ficTopicOpts(f.topicId);$('#fiNote').value=f.note||'';$('#fiDone').checked=!!f.done;
   $('#fiDlg').showModal();
 }
 $('#fiCancel').onclick=()=>$('#fiDlg').close();
@@ -1182,7 +1193,9 @@ $('#fiSave').onclick=()=>{
   const done=$('#fiDone').checked;
   Object.assign(f,{title:t,topicId:$('#fiTopic').value,note:$('#fiNote').value.trim()});
   if(done!==f.done){f.done=done;f.doneAt=done?Date.now():0}
-  save();$('#fiDlg').close();renderFic();toast('Ficha guardada');
+  const to=$('#fiCat').value;let msg='Ficha guardada';
+  if(to!==FED.k&&S.fichas[to]){const L=S.fichas[FED.k];L.splice(L.indexOf(f),1);S.fichas[to].push(f);msg='Ficha movida a '+FNAME[to]}
+  save();$('#fiDlg').close();renderFic();toast(msg);
 };
 $('#fiDel').onclick=()=>{
   const L=S.fichas[FED.k],i=L.findIndex(x=>x.id===FED.id);if(i<0)return;const[rm]=L.splice(i,1),k=FED.k;
@@ -1408,7 +1421,7 @@ $('#v-aju').addEventListener('click',e=>{
     else if(x==='dbxon')showConnect();
     else if(x==='exp')saveFile('estudio_copia_'+todayK()+'.json',JSON.stringify({...S,ui:undefined},null,1),'application/json');
     else if(x==='demo'){if(confirm('Esto sustituye tus datos actuales por tres meses de ejemplo. ¿Continuar?')){demo();toast('Datos de ejemplo cargados')}}
-    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas, fechas clave y fichas?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.fichas={comp:[],caso:[]};S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
+    else if(x==='wipe'){if(confirm('¿Borrar todas las sesiones, lecturas, fechas clave y fichas?')){const T=TM();S.meses={};S.lecturas=[];S.eventos=[];S.fichas={plan:[],edif:[],caso:[]};S.estado.session=null;S.estado.pause=null;S.estado.sel={topicId:null,tipo:'test'};T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.cycle=0;reindex();save();renderAll();toast('Datos borrados')}}
   }
 });
 
@@ -1440,9 +1453,10 @@ function demo(){
   }
   const nx=w=>{let k=addDays(tk,1);while(wd(k)!==w)k=addDays(k,1);return k};
   const T=id=>S.tipos.some(t=>t.id===id)?id:S.tipos[0].id;
-  if(!S.fichas.comp.length&&!S.fichas.caso.length){
+  if(!S.fichas.plan.length&&!S.fichas.edif.length&&!S.fichas.caso.length){
     const f=(title,topicId,done)=>({id:uid(),title,topicId,note:'',done,doneAt:done?Date.now()-86400000*(3+Math.floor(rnd()*20)):0,createdAt:Date.now()});
-    S.fichas.comp=[f('Estructura tipo del tema de urbanismo','t24',true),f('Esquema TRLSRU: clases de suelo','t24',true),f('Planeamiento general: contenido y tramitación','t30',false),f('Licencias urbanísticas en Madrid','t59',false)];
+    S.fichas.plan=[f('Esquema TRLSRU: clases de suelo','t24',true),f('Planeamiento general: contenido y tramitación','t30',false),f('Plan parcial y plan especial','t32',false)];
+    S.fichas.edif=[f('CTE seguridad en caso de incendio','t64',true),f('Accesibilidad: ordenanza y CTE DB-SUA','t75',false)];
     S.fichas.caso=[f('Caso: licencia de obra mayor con PGOUM','t59',true),f('Caso: expediente de disciplina urbanística','t41',false),f('Caso: accesibilidad en edificio existente','t75',false)];
   }
   S.eventos=[
