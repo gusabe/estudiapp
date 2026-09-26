@@ -765,6 +765,7 @@ const citem=id=>isC(id)?S.fichas.segundo.find(x=>x.id===id.slice(2)):null;
 const validFor=(id,tipo)=>!!id&&(tipo==='comp'?!!citem(id):!!topic(id));
 const cnt=(t,ti)=>isC(t)?(ti==='comp'?(citem(t)?.n||0):0):(CNT[t]?.[ti]||0);
 const tlabel=id=>{if(isC(id)){const c=citem(id);return c?c.title:'Ficha eliminada'}const t=topic(id);return t?t.num+'. '+t.name:'Tema eliminado'};
+const lastLect=id=>{let m=0;for(const l of S.lecturas)if(l.topicId===id&&l.tipo==='test'&&l.ts>m)m=l.ts;return m};
 const itemName=id=>isC(id)?'la ficha «'+tlabel(id)+'»':'el tema '+(topic(id)?.num??'');
 
 /* sesiones */
@@ -789,13 +790,6 @@ function keysBetween(a,b){const out=[];let k=a;while(k<=b){out.push(k);k=addDays
 function sumBetween(a,b){return keysBetween(a,b).reduce((x,k)=>x+totalOn(k),0)}
 function allDays(){const out=[];for(const m of Object.values(S.meses))for(const [k,d] of Object.entries(m.days))if(d.sessions.length)out.push(k);return out.sort()}
 function goalOn(k){return (+S.config.schedule[wd(k)]||0)*HOUR}
-function topicTotals(){
-  const T={};
-  const add=(id,ms,end)=>{const o=T[id]||(T[id]={ms:0,last:0});o.ms+=ms;if(end>o.last)o.last=end};
-  for(const m of Object.values(S.meses))for(const d of Object.values(m.days))for(const s of d.sessions)add(s.topicId,dur(s),s.end);
-  const L=S.estado.session;if(L)add(L.topicId,Date.now()-L.start,Date.now());
-  return T;
-}
 
 /* lecturas */
 function addLectura(tid,tipo){
@@ -820,21 +814,13 @@ function queue(tipo){
   return S.temario.topics.slice().sort((a,b)=>cnt(a.id,tipo)-cnt(b.id,tipo)||IDX.t[a.id].i-IDX.t[b.id].i);
 }
 function currentSel(){
-  const L=S.estado.session;if(L)return{topicId:L.topicId,tipo:L.tipo};
   const sel=S.estado.sel||{},tipo=sel.tipo||'test';
   if(validFor(sel.topicId,tipo))return{topicId:sel.topicId,tipo,manual:true};
   return{topicId:queue(tipo)[0]?.id,tipo};
 }
-function setSel(topicId,tipo){
-  const L=S.estado.session;
-  S.estado.sel={topicId,tipo};
-  if(L&&(L.topicId!==topicId||L.tipo!==tipo)){commitLive(Date.now());S.estado.session={topicId,tipo,start:Date.now()}}
-  save();renderAll();
-}
+function setSel(topicId,tipo){S.estado.sel={topicId,tipo};save();renderAll()}
 function setTipo(tipo){
-  const L=S.estado.session;
-  if(L){const id=validFor(L.topicId,tipo)?L.topicId:queue(tipo)[0]?.id;if(!id){toast('Primero añade fichas en Temario > Segundo examen');return}setSel(id,tipo)}
-  else{const cur=S.estado.sel?.topicId;S.estado.sel={topicId:validFor(cur,tipo)?cur:null,tipo};save();renderAll()}
+  const cur=S.estado.sel?.topicId;S.estado.sel={topicId:validFor(cur,tipo)?cur:null,tipo};save();renderAll();
 }
 function pickTopic(tid){
   if(isC(tid)){if(!citem(tid))return;setSel(tid,'comp');toast('Ficha «'+tlabel(tid)+'» seleccionada');return}
@@ -866,20 +852,14 @@ function commitLive(end,pomo){
   while(st<end){
     const d=new Date(st);d.setHours(24,0,0,0);
     const e=Math.min(end,d.getTime());
-    if(e-st>=30000){last={id:uid(),topicId:L.topicId,tipo:L.tipo,start:st,end:e,note:''};addSession(last)}
+    if(e-st>=30000){last={id:uid(),start:st,end:e,note:''};addSession(last)}
     st=e;
   }
   if(last&&pomo)last.pomo=true;
   S.estado.session=null;
   return L;
 }
-function beginSession(at){
-  const sel=currentSel();
-  if(!sel.topicId){toast(sel.tipo==='comp'?'Primero añade fichas en Temario > Segundo examen':'Elige un tema');return false}
-  S.estado.sel={topicId:sel.topicId,tipo:sel.tipo};
-  S.estado.session={topicId:sel.topicId,tipo:sel.tipo,start:at};
-  return true;
-}
+function beginSession(at){S.estado.session={start:at};return true}
 function play(){
   ensureAudio();const now=Date.now();
   if(!isPomo()){
@@ -901,11 +881,11 @@ function pause(){
   save();renderAll();
 }
 function stop(){
-  const now=Date.now(),had=commitLive(now);
+  const now=Date.now(),had=S.estado.session?now-S.estado.session.start:0;commitLive(now);
   S.estado.pause=null;
   const T=TM();T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');
   save();renderAll();
-  if(had)offerLectura(had);else toast('Temporizador reiniciado');
+  toast(had>=30000?'Tiempo guardado en el registro: '+fmtHM(had):'Temporizador parado');
 }
 function skip(){
   if(!isPomo())return;
@@ -933,11 +913,6 @@ function setMode(m){
   if(m===S.estado.mode)return;
   if(busy()){toast('Para el temporizador antes de cambiar de modo');return}
   S.estado.mode=m;save();renderAll();
-}
-function offerLectura(sess){
-  const id=sess.topicId;if(!(isC(id)?citem(id):topic(id)))return;
-  const tipo=isC(id)?'comp':sess.tipo;
-  toast('Sesión guardada.','+1 lectura a '+itemName(id),()=>{addLectura(id,tipo);renderAll();toast(tlabel(id)+': '+pad(cnt(id,tipo))+' lecturas')});
 }
 function timerInfo(){
   const T=TM(),now=Date.now();
@@ -1025,7 +1000,7 @@ function tick(){
   $('#dSkip').hidden=!isPomo();
   $('#dSkip').textContent=T.phase==='estudio'?'» Descanso':'» Estudio';
   $('#dClock').textContent=I.clock;
-  $('#dTopic').textContent=T.phase!=='estudio'&&isPomo()&&T.running?'Descanso. Levántate y bebe agua.':(tlabel(sel.topicId)+' / '+tipoName(sel.tipo));
+  {const g=goalOn(k),tt=totalOn(k);$('#dTopic').textContent=T.phase!=='estudio'&&isPomo()&&T.running?'Descanso. Levántate y bebe agua.':(g?'Objetivo de hoy '+fmtHM(g)+' · '+pct(tt,g)+' % hecho':'Hoy no tienes objetivo')}
   const dd=$('#dDots');dd.hidden=!isPomo();if(isPomo()){const h=dotsHTML();if(dd.innerHTML!==h)dd.innerHTML=h}
   $('#dHoy').textContent='Hoy '+fmtHM(totalOn(k));
   const ld=$('#livedot');ld.classList.toggle('on',!!S.estado.session);ld.title=I.status;
@@ -1053,13 +1028,13 @@ function track(k,list){
   for(const s of list){const a=new Date(s.start),b=new Date(s.end);h0=Math.min(h0,a.getHours());h1=Math.max(h1,dkey(b)===k?b.getHours()+1:24)}
   h1=Math.min(24,Math.max(h1,h0+1));
   const st=parseKey(k).getTime()+h0*HOUR,span=(h1-h0)*HOUR;
-  const seg=list.map(s=>`<i class="${s.tipo==='comp'?'c ':''}${s.live?'live':''}" style="left:${(s.start-st)/span*100}%;width:${Math.max(.25,dur(s)/span*100)}%;${s.tipo==='comp'?'':'background:var(--ink)'}" title="${fmtClock(s.start)}–${fmtClock(s.end)} ${esc(tlabel(s.topicId))}"></i>`).join('');
+  const seg=list.map(s=>`<i class="${s.live?'live':''}" style="left:${(s.start-st)/span*100}%;width:${Math.max(.25,dur(s)/span*100)}%;background:var(--ink)" title="${fmtClock(s.start)}–${s.live?'ahora':fmtClock(s.end)} · ${fmtHM(dur(s))}"></i>`).join('');
   const stp=(h1-h0)>10?2:1;let ax='';
   for(let h=h0;h<=h1;h+=stp)ax+=`<span style="left:${(h-h0)/(h1-h0)*100}%">${pad(h)}</span>`;
   return `<div class="strip"><div class="track">${seg}</div><div class="ticks in">${ax}</div></div>`;
 }
 function sessionCells(list){
-  return list.map(s=>`<div class="cell"><span class="dotc" style="background:${s.tipo==='comp'?'var(--bg)':'var(--ink)'}"></span><div class="grow"><div class="tn" data-tid="${s.topicId}">${esc(tlabel(s.topicId))}</div><div class="sub">${fmtClock(s.start)}–${s.live?'ahora':fmtClock(s.end)} · ${tipoName(s.tipo)}${s.pomo?' · Bloque completo':''}${s.live?' · En curso':''}${s.note?' · '+esc(s.note):''}</div></div><span class="val num">${fmtHM(dur(s))}</span></div>`).join('');
+  return list.map(s=>`<div class="cell"><span class="dotc" style="background:var(--ink)"></span><div class="grow"><div class="num">${fmtClock(s.start)} – ${s.live?'ahora':fmtClock(s.end)}</div><div class="sub">${s.live?'En curso':s.pomo?'Bloque de estudio completo':'Estudio'}${s.note?' · '+esc(s.note):''}</div></div><span class="val num">${fmtHM(dur(s))}</span></div>`).join('');
 }
 function eventCell(e){
   const n=daysTo(e.date);
@@ -1090,7 +1065,7 @@ function vueltasHTML(){
 function renderHoy(){
   const k=todayK(),tot=totalOn(k),g=goalOn(k),list=sessionsOn(k),sel=currentSel(),t=topic(sel.topicId),c=citem(sel.topicId),I=timerInfo(),pomo=isPomo(),isComp=sel.tipo==='comp';
   const wk0=addDays(k,-wd(k)),wkT=sumBetween(wk0,k),ex=nextExam(),up=upcoming().slice(0,4);
-  const q=queue(sel.tipo).slice(0,6),TT=topicTotals();
+  const q=queue(sel.tipo).slice(0,6);
   const P=PO();
   $('#v-hoy').innerHTML=`
   <div class="pagehead"><div class="ph">
@@ -1122,9 +1097,9 @@ function renderHoy(){
         ${isComp&&!S.fichas.segundo.length?`<button class="cell act" data-a="goseg">Añadir fichas del segundo examen</button>`
           :`<label class="cell"><span class="grow">${isComp?'Ficha':'Tema'}</span><select id="hTopic" style="max-width:62%">${isComp?compOptions(sel.topicId):topicOptions(sel.topicId)}</select></label>`}
         <div class="cell"><span class="grow">Tipo de estudio</span>${TIPOS.map(ti=>`<button class="chip${sel.tipo===ti.id?' on':''}" data-tipo="${ti.id}">${ti.name}</button>`).join('')}</div>
-        ${t&&!isComp?`<div class="cell"><div class="grow"><div>Lecturas del tema ${t.num}</div><div class="sub">Test ${pad(cnt(t.id,'test'))} · ${fmtHM(TT[t.id]?.ms||0)} estudiadas</div></div><button class="btn" data-a="plus">+1 Test</button></div>`:''}
-        ${c&&isComp?`<div class="cell"><div class="grow"><div>Lecturas de la ficha</div><div class="sub">${SEGCAT[c.cat]||''} · Composición ${pad(c.n||0)} · ${fmtHM(TT[sel.topicId]?.ms||0)} estudiadas</div></div><button class="btn" data-a="plus">+1 Composición</button></div>`:''}
-        ${sel.manual&&!S.estado.session&&q[0]&&q[0].id!==sel.topicId?`<button class="cell act" data-a="follow">Volver al orden: ${isComp?esc(q[0].name):'tema '+q[0].num}</button>`:''}
+        ${t&&!isComp?`<div class="cell"><div class="grow"><div>Lecturas del tema ${t.num}</div><div class="sub">${pad(cnt(t.id,'test'))} lecturas de test${lastLect(t.id)?' · última '+fmtDMY(dkey(lastLect(t.id))):''}</div></div><button class="btn" data-a="plus">+1 Test</button></div>`:''}
+        ${c&&isComp?`<div class="cell"><div class="grow"><div>Lecturas de la ficha</div><div class="sub">${SEGCAT[c.cat]||''} · ${pad(c.n||0)} lecturas${c.lastAt?' · última '+fmtDMY(dkey(c.lastAt)):''}</div></div><button class="btn" data-a="plus">+1 Composición</button></div>`:''}
+        ${sel.manual&&q[0]&&q[0].id!==sel.topicId?`<button class="cell act" data-a="follow">Volver al orden: ${isComp?esc(q[0].name):'tema '+q[0].num}</button>`:''}
       </div>
       <div class="section-h">Vueltas al temario</div>
       ${vueltasHTML()}
@@ -1163,7 +1138,7 @@ let TEMF={q:'',b:'',f:''},TEMP='1',SEGF='';
 function temPages(){return `<div class="seg"><button data-tp="1" aria-pressed="${TEMP==='1'}">Primer examen</button><button data-tp="2" aria-pressed="${TEMP==='2'}">Segundo examen</button></div>`}
 function renderTem(){
   if(TEMP==='2')return renderSeg();
-  const {blocks,topics}=S.temario,TT=topicTotals(),sel=currentSel(),L=S.estado.session;
+  const {blocks,topics}=S.temario,sel=currentSel();
   const vT=vuelta('test'),nT=queue('test')[0]?.id,q=TEMF.q.trim().toLowerCase();
   const ok=t=>(!q||t.name.toLowerCase().includes(q)||String(t.num)===q)&&(!TEMF.b||t.block===TEMF.b)&&(!TEMF.f||cnt(t.id,'test')<vT);
   const ctr=(t,ti,nx)=>{const n=cnt(t.id,ti);return `<span class="ctr"><span class="lb">${ti==='test'?'Test':'Comp.'}</span><button class="round" data-minus="${ti}" data-t="${t.id}" aria-label="Restar lectura de ${tipoName(ti)}" ${n?'':'disabled'}>−</button><b class="${n?'':'z'}${nx?' nxt':''}" title="${nx?'Siguiente en '+tipoName(ti).toLowerCase():''}">${pad(n)}</b><button class="round" data-plus="${ti}" data-t="${t.id}" aria-label="Sumar lectura de ${tipoName(ti)}">+</button></span>`};
@@ -1172,9 +1147,9 @@ function renderTem(){
     const bt=topics.filter(t=>t.block===b.id),vis=bt.filter(ok);
     if(!vis.length)continue;
     body+=`<div class="section-h">Bloque ${IDX.b[b.id].i+1} · ${esc(b.name)}</div><div class="group">`+vis.map(t=>{
-      const tt=TT[t.id];
+      const ll=lastLect(t.id);
       return `<div class="cell tcell${t.id===sel.topicId?' cur':''}"><span class="val num" style="width:30px;text-align:right">${t.num}</span>
-        <div class="grow"><div class="tn" data-tid="${t.id}">${L&&L.topicId===t.id?'▶\uFE0E ':''}${esc(t.name)}</div><div class="sub">${tt?fmtHM(tt.ms)+' · última sesión '+fmtDMY(dkey(tt.last)):'Sin sesiones'}${t.id===nT?' · <span class="hl">Siguiente</span>':''}</div></div>
+        <div class="grow"><div class="tn" data-tid="${t.id}">${esc(t.name)}</div><div class="sub">${ll?'Última lectura '+fmtDMY(dkey(ll)):'Sin lecturas'}${t.id===nT?' · <span class="hl">Siguiente</span>':''}</div></div>
         <span class="ctrs">${ctr(t,'test',t.id===nT)}</span></div>`}).join('')+`</div>`;
   }
   const lt=S.lecturas.filter(l=>l.tipo==='test').length;
@@ -1202,12 +1177,12 @@ $('#v-tem').addEventListener('click',e=>{const tp=e.target.closest('[data-tp]');
 /* ---------- TEMARIO · SEGUNDO EXAMEN: fichas de urbanismo y de edificación ---------- */
 const segOk=c=>!SEGF||c.cat===SEGF;
 function renderSeg(){
-  const L=S.fichas.segundo,TT=topicTotals(),vis=L.filter(segOk),sel=currentSel(),live=S.estado.session,nx=queue('comp')[0]?.id;
+  const L=S.fichas.segundo,vis=L.filter(segOk),sel=currentSel(),nx=queue('comp')[0]?.id;
   const count=k=>L.filter(c=>!k||c.cat===k).length;
-  const rows=vis.map((c,vi)=>{const id='c:'+c.id,n=c.n||0,tt=TT[id];
+  const rows=vis.map((c,vi)=>{const id='c:'+c.id,n=c.n||0;
     return `<div class="cell seg-row${id===sel.topicId?' cur':''}" data-sid="${c.id}">
       <span class="drag" data-drag="${c.id}" title="Arrastra para reordenar" aria-hidden="true">≡</span>
-      <div class="grow" style="cursor:pointer" data-segedit="${c.id}"><div class="ft">${live&&live.topicId===id?'▶\uFE0E ':''}${esc(c.title)}</div><div class="sub">${SEGCAT[c.cat]}${tt?' · '+fmtHM(tt.ms):''} · ${c.lastAt?'última lectura '+fmtDMY(dkey(c.lastAt)):'sin lecturas'}${id===nx?' · <span class="hl">Siguiente</span>':''}</div></div>
+      <div class="grow" style="cursor:pointer" data-segedit="${c.id}"><div class="ft">${esc(c.title)}</div><div class="sub">${SEGCAT[c.cat]} · ${c.lastAt?'última lectura '+fmtDMY(dkey(c.lastAt)):'sin lecturas'}${id===nx?' · <span class="hl">Siguiente</span>':''}</div></div>
       <span class="ctr"><span class="lb">Lecturas</span><button class="round" data-segm="${c.id}" aria-label="Restar lectura" ${n?'':'disabled'}>−</button><b class="${n?'':'z'}">${pad(n)}</b><button class="round" data-segp="${c.id}" aria-label="Sumar lectura">+</button></span>
       <span class="fmove"><button class="round" data-segmv="-1" data-id="${c.id}" aria-label="Subir ${esc(c.title)}" ${vi===0?'disabled':''}>↑</button><button class="round" data-segmv="1" data-id="${c.id}" aria-label="Bajar ${esc(c.title)}" ${vi===vis.length-1?'disabled':''}>↓</button></span>
     </div>`}).join('');
@@ -1481,11 +1456,11 @@ function renderReg(){
   const [y,mm]=REGM.split('-').map(Number),first=REGM+'-01',last=dkey(new Date(y,mm,0));
   const mKeys=keysBetween(first,last<k?last:(first<=k?k:last)).filter(x=>totalOn(x)>0);
   const mTot=mKeys.reduce((a,x)=>a+totalOn(x),0),mPom=mKeys.reduce((a,x)=>a+pomosOn(x),0);
-  const rows=mKeys.map(x=>{const l=sessionsOn(x),tot=l.reduce((a,s)=>a+dur(s),0),g=goalOn(x),tops=[...new Set(l.map(s=>topic(s.topicId)?.num).filter(Boolean))];
-    return `<tr data-k="${x}" class="${x===REG?'on':''}"><td>${fmtShort(x)}</td><td class="num">${fmtHM(tot)}</td><td class="num">${g?pct(tot,g)+' %':'—'}</td><td class="num">${pomosOn(x)}</td><td>${tops.join(', ')}</td></tr>`}).join('');
+  const rows=mKeys.map(x=>{const l=sessionsOn(x),tot=l.reduce((a,s)=>a+dur(s),0),g=goalOn(x);
+    return `<tr data-k="${x}" class="${x===REG?'on':''}"><td>${fmtShort(x)}</td><td class="num">${fmtHM(tot)}</td><td class="num">${g?pct(tot,g)+' %':'—'}</td><td class="num">${pomosOn(x)}</td><td class="num">${l.length}</td></tr>`}).join('');
   const list=sessionsOn(REG),dTot=list.reduce((a,s)=>a+dur(s),0);
-  const edit=list.map(s=>s.live?`<div class="cell"><div class="grow"><div>${esc(tlabel(s.topicId))}</div><div class="sub">${fmtClock(s.start)}–ahora · ${tipoName(s.tipo)} · En curso</div></div><span class="val num">${fmtHM(dur(s))}</span></div>`:
-    `<div class="cell" data-id="${s.id}"><div class="rrow"><input type="time" data-f="start" value="${fmtClock(s.start)}" aria-label="Inicio"><input type="time" data-f="end" value="${fmtClock(s.end)}" aria-label="Fin"><select data-f="topicId" aria-label="Tema o ficha">${isC(s.topicId)?compOptions(s.topicId):topicOptions(s.topicId)}</select><select data-f="tipo" aria-label="Tipo">${tipoOptions(s.tipo)}</select><input type="text" data-f="note" value="${esc(s.note)}" placeholder="Nota" aria-label="Nota"></div><span class="val num">${fmtHM(dur(s))}${s.pomo?' ●':''}</span><button class="round" data-del="${s.id}" aria-label="Eliminar sesión">×</button></div>`).join('');
+  const edit=list.map(s=>s.live?`<div class="cell"><div class="grow"><div class="num">${fmtClock(s.start)} – ahora</div><div class="sub">En curso</div></div><span class="val num">${fmtHM(dur(s))}</span></div>`:
+    `<div class="cell" data-id="${s.id}"><div class="rrow"><input type="time" data-f="start" value="${fmtClock(s.start)}" aria-label="Inicio"><input type="time" data-f="end" value="${fmtClock(s.end)}" aria-label="Fin"><input type="text" data-f="note" value="${esc(s.note)}" placeholder="Nota" aria-label="Nota"></div><span class="val num">${fmtHM(dur(s))}${s.pomo?' ●':''}</span><button class="round" data-del="${s.id}" aria-label="Eliminar sesión">×</button></div>`).join('');
   $('#v-reg').innerHTML=`
   <div class="pagehead"><div class="ph">
   <h1 class="large-title">Registro</h1>
@@ -1499,7 +1474,7 @@ function renderReg(){
   </div>
   <div class="section-h">Por días</div>
   <div class="datebar"><button class="round" data-m="-1" aria-label="Mes anterior">‹</button><span class="mono" style="font-weight:700;padding:0 10px;text-transform:uppercase">${MESES[mm-1]} ${y}</span><button class="round" data-m="1" aria-label="Mes siguiente">›</button><button class="btn plain" data-m="0">Este mes</button></div>
-  ${rows?`<div class="card scroll" style="border-bottom:1px solid var(--ink)"><table class="table"><thead><tr><th>Día</th><th>Horas</th><th>Objetivo</th><th>Bloques</th><th>Temas</th></tr></thead><tbody>${rows}<tr style="font-weight:700"><td>Total</td><td class="num">${fmtHM(mTot)}</td><td></td><td class="num">${mPom}</td><td>${mKeys.length} días</td></tr></tbody></table></div>`
+  ${rows?`<div class="card scroll" style="border-bottom:1px solid var(--ink)"><table class="table"><thead><tr><th>Día</th><th>Horas</th><th>Objetivo</th><th>Bloques</th><th>Sesiones</th></tr></thead><tbody>${rows}<tr style="font-weight:700"><td>Total · ${mKeys.length} días</td><td class="num">${fmtHM(mTot)}</td><td></td><td class="num">${mPom}</td><td></td></tr></tbody></table></div>`
      :'<div class="empty" style="border-bottom:1px solid var(--ink)">Sin horas registradas este mes.</div>'}
   <div class="section-h">Detalle del día</div>
   <div class="datebar"><button class="round" data-d="-1" aria-label="Día anterior">‹</button><input type="date" id="rdate" value="${REG}" aria-label="Día"><button class="round" data-d="1" aria-label="Día siguiente">›</button><button class="btn plain" data-d="0">Hoy</button><span class="mono" style="margin-left:auto;font-size:14px">${fmtHM(dTot)}</span></div>
@@ -1517,7 +1492,7 @@ $('#v-reg').addEventListener('click',e=>{
   else if(a){
     const day=dayObj(REG,true);let st=day.sessions.length?day.sessions[day.sessions.length-1].end:tsAt(REG,'09:00'),en=st+HOUR;
     const lim=tsAt(REG,'23:59');if(en>lim){en=lim;st=Math.min(st,en-30*MIN)}
-    const sel=currentSel();addSession({id:uid(),topicId:sel.topicId,tipo:sel.tipo,start:st,end:en,note:''});save();renderAll();
+    addSession({id:uid(),start:st,end:en,note:''});save();renderAll();
   }
 });
 $('#v-reg').addEventListener('change',e=>{
@@ -1633,7 +1608,7 @@ function demo(){
     for(let j=0;j<n;j++){
       if(j===4)t+=HOUR*(1.5+rnd());
       const tipo=(i>60||rnd()<.7)?'test':'comp',tp=queue(tipo)[0],full=rnd()<.88,len=full?pd:pd*(.3+rnd()*.4);
-      addSession({id:uid(),topicId:tp.id,tipo,start:t,end:t+len,note:'',...(full?{pomo:true}:{})});
+      addSession({id:uid(),start:t,end:t+len,note:'',...(full?{pomo:true}:{})});
       acc[tipo]+=len/HOUR;
       if(acc[tipo]>=need[tipo]){if(isC(tp.id)){const c=citem(tp.id);c.n=(c.n||0)+1;c.lastAt=t+len}else{S.lecturas.push({id:uid(),topicId:tp.id,tipo,ts:t+len});recount()}acc[tipo]=0;need[tipo]=(tipo==='test'?1.2:.9)+rnd()*1.2}
       t+=len+((j+1)%PO().every===0?PO().long:PO().short)*MIN;
