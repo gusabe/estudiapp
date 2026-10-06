@@ -843,7 +843,8 @@ const PO=()=>S.config.pomo;
 const TM=()=>S.estado.timer;
 const isPomo=()=>S.estado.mode==='pomo';
 const phaseDur=ph=>(ph==='estudio'?PO().study:ph==='corto'?PO().short:PO().long)*MIN;
-const timerLeft=()=>{const T=TM();return T.running?Math.max(0,T.endsAt-Date.now()):T.remaining};
+const timerLeft=()=>{const T=TM();return T.running?T.endsAt-Date.now():T.remaining};
+const fmtLeft=ms=>ms<0?'+'+fmtMS(-ms):fmtMS(ms);
 function busy(){const T=TM();return !!(S.estado.session||S.estado.pause||T.running||T.phase!=='estudio'||T.remaining!==phaseDur('estudio'))}
 
 function commitLive(end,pomo){
@@ -855,7 +856,7 @@ function commitLive(end,pomo){
     if(e-st>=30000){last={id:uid(),start:st,end:e,note:''};addSession(last)}
     st=e;
   }
-  if(last&&pomo)last.pomo=true;
+  if(pomo){const tgt=last||(dayObj(dkey(end))?.sessions||[]).at(-1);if(tgt)tgt.pomo=true} // bloque completo aunque el último trozo fuera muy corto
   S.estado.session=null;
   return L;
 }
@@ -870,20 +871,22 @@ function play(){
     const T=TM();if(T.running)return;
     if(T.day!==todayK()){T.day=todayK();T.cycle=0}
     if(T.phase==='estudio'&&!beginSession(now))return;
-    T.running=true;T.endsAt=now+T.remaining;
+    T.running=true;T.endsAt=now+T.remaining;if(T.remaining<=0)T.alerted=T.endsAt; // ya avisó: no repetir al reanudar
   }
   save();renderAll();
 }
 function pause(){
   const now=Date.now();
   if(!isPomo()){if(!S.estado.session)return;commitLive(now);S.estado.pause={start:now}}
-  else{const T=TM();if(!T.running)return;T.remaining=Math.max(0,T.endsAt-now);T.running=false;commitLive(now)}
+  else{const T=TM();if(!T.running)return;T.remaining=T.endsAt-now;T.running=false;commitLive(now)}
   save();renderAll();
 }
 function stop(){
-  const now=Date.now(),had=S.estado.session?now-S.estado.session.start:0;commitLive(now);
+  const now=Date.now(),had=S.estado.session?now-S.estado.session.start:0,T=TM();
+  const full=isPomo()&&T.phase==='estudio'&&(phaseDur('estudio')-timerLeft())>=phaseDur('estudio');
+  commitLive(now,full);if(full)T.cycle++;
   S.estado.pause=null;
-  const T=TM();T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');
+  T.running=false;T.phase='estudio';T.remaining=phaseDur('estudio');T.alerted=0;
   save();renderAll();
   toast(had>=30000?'Tiempo guardado en el registro: '+fmtHM(had):'Temporizador parado');
 }
@@ -891,8 +894,16 @@ function skip(){
   if(!isPomo())return;
   const T=TM(),now=Date.now();
   const done=T.phase==='estudio'&&(phaseDur('estudio')-timerLeft())>=phaseDur('estudio')*.6;
+  if(T.phase==='estudio'&&!done&&!confirm('Aún no has cumplido el tiempo de estudio. ¿Pasar ya al descanso?'))return;
   phaseEnd(now,done,true);
   save();renderAll();
+}
+function phaseDue(){
+  // se cumple el tiempo de la fase: suena el aviso una vez y el reloj sigue (tiempo extra)
+  const T=TM(),live=Date.now()-T.endsAt<60000;T.alerted=T.endsAt;save();
+  if(!live){renderView();return}
+  const msg=T.phase==='estudio'?'Tiempo de estudio cumplido. Pulsa » Descanso cuando quieras parar.':'Descanso cumplido. Pulsa » Estudio para volver.';
+  beep(T.phase==='estudio'?3:2);notify('Estudio',msg);toast(msg);renderView();
 }
 function phaseEnd(at,completed,manual){
   const T=TM(),live=Date.now()-at<60000;
@@ -900,13 +911,14 @@ function phaseEnd(at,completed,manual){
     commitLive(at,completed);
     if(completed)T.cycle++;
     const next=completed&&T.cycle%PO().every===0?'largo':'corto';
-    T.phase=next;T.remaining=phaseDur(next);
-    if(PO().autoBreak){T.running=true;T.endsAt=at+T.remaining}else T.running=false;
-    if(live){const msg=(completed?'Bloque de estudio '+T.cycle+' hecho. ':'')+'Descanso '+(next==='largo'?'largo ':'')+'de '+PO()[next==='largo'?'long':'short']+' min.';if(!manual){beep(3);notify('Estudio',msg)}toast(msg)}
+    T.phase=next;T.remaining=phaseDur(next);T.alerted=0;
+    T.running=true;T.endsAt=at+T.remaining;
+    if(live)toast((completed?'Bloque de estudio '+T.cycle+' hecho. ':'')+'Descanso '+(next==='largo'?'largo ':'')+'de '+PO()[next==='largo'?'long':'short']+' min.');
   }else{
-    T.phase='estudio';T.remaining=phaseDur('estudio');T.running=false;
-    if(PO().autoStudy&&live&&beginSession(at)){T.running=true;T.endsAt=at+T.remaining}
-    if(live){const msg=T.running?'Descanso terminado. Empieza el siguiente bloque de estudio.':'Descanso terminado. Pulsa Empezar para seguir.';if(!manual){beep(2);notify('Estudio',msg)}toast(msg)}
+    T.phase='estudio';T.remaining=phaseDur('estudio');T.alerted=0;
+    if(T.day!==todayK()){T.day=todayK();T.cycle=0}
+    beginSession(at);T.running=true;T.endsAt=at+T.remaining;
+    if(live)toast('A estudiar: '+PO().study+' min.');
   }
 }
 function setMode(m){
@@ -923,7 +935,8 @@ function timerInfo(){
   }
   const full=T.remaining===phaseDur(T.phase)&&!T.running;
   const brk=T.phase!=='estudio',name=T.phase==='largo'?'Descanso largo':brk?'Descanso':'Estudio';
-  return{clock:fmtMS(timerLeft()),status:T.running?(brk?name:'Estudiando'):full?(brk?name+' listo':'Listo'):'En pausa',on:T.running,
+  const over=timerLeft()<0;
+  return{clock:fmtLeft(timerLeft()),over,status:over?(brk?'Descanso cumplido':'Tiempo cumplido'):T.running?(brk?name:'Estudiando'):full?(brk?name+' listo':'Listo'):'En pausa',on:T.running,
     spread:T.running?name:full?(brk?name:'Estudio'):'En pausa',
     play:T.running?'❚❚ Pausa':full?(brk?'▶\uFE0E Descansar':'▶\uFE0E Empezar'):'▶\uFE0E Seguir',running:T.running,canStop:busy()};
 }
@@ -992,7 +1005,7 @@ function dotsHTML(){
 function tick(){
   const T=TM(),now=Date.now();
   let guard=0;
-  while(isPomo()&&T.running&&now>=T.endsAt&&guard++<6){phaseEnd(T.endsAt,true,false);save();renderView()}
+  if(isPomo()&&T.running&&now>=T.endsAt&&T.alerted!==T.endsAt)phaseDue();
   const I=timerInfo(),k=todayK(),sel=currentSel();
   $('#dSpread').textContent=I.spread;
   $('#dPlay').textContent=I.play;
@@ -1011,6 +1024,7 @@ function tick(){
     const st=$('#hStatus');if(st){st.className='status'+(I.on?' on':'');st.lastChild.textContent=I.status}
     const p=$('#hPlay');if(p)p.textContent=I.play;
     const s=$('#hStop');if(s)s.disabled=!I.canStop;
+    const sk=$('#hSkip');if(sk){sk.classList.toggle('filled',!!I.over);sk.classList.toggle('outline',!I.over)}
     const tt=$('#hTot');if(tt)tt.textContent=fmtHM(totalOn(k));
     drawAnalog();
   }
@@ -1081,10 +1095,10 @@ function renderHoy(){
         <div class="pomo-dots">${dotsHTML()}<span class="mono" style="font-size:11px;margin-left:6px;text-transform:uppercase">${pomosOn(k)} ${pomosOn(k)===1?'bloque':'bloques'} de estudio hoy</span></div>`:`<div class="segs"><span class="pill on">Sin límite de tiempo</span></div>`}
         <div class="btnrow">
           <button class="btn big outline" id="hStop" data-a="stop" ${I.canStop?'':'disabled'}>■ Parar</button>
-          ${pomo?`<button class="btn big outline" data-a="skip">${TM().phase==='estudio'?'» Descanso':'» Estudio'}</button>`:''}
+          ${pomo?`<button class="btn big ${I.over?'filled':'outline'}" id="hSkip" data-a="skip">${TM().phase==='estudio'?'» Descanso':'» Estudio'}</button>`:''}
           <button class="btn big filled" id="hPlay" data-a="play">${I.play}</button>
         </div>
-        <p class="section-f" style="padding:10px 0 0;border:0">${pomo?`${P.study} min de estudio y ${P.short} de descanso. Cada ${P.every} bloques de estudio, descanso de ${P.long} min. Se cambia en Ajustes.`:'Cuenta hacia arriba sin descansos programados. Parar guarda la sesión en el registro.'}</p>
+        <p class="section-f" style="padding:10px 0 0;border:0">${pomo?`${P.study} min de estudio y ${P.short} de descanso. Cada ${P.every} bloques de estudio, descanso de ${P.long} min. Al cumplirse cada tiempo suena el aviso y el reloj sigue; cambias de fase tú con » Descanso o » Estudio.`:'Cuenta hacia arriba sin descansos programados. Parar guarda la sesión en el registro.'}</p>
       </div>
     </div>
     <div>
@@ -1522,9 +1536,7 @@ function renderAju(){
     <label class="cell"><span class="grow">Descanso corto<div class="sub">Entre bloques de estudio</div></span><input type="number" min="1" max="60" data-p="short" value="${P.short}" style="width:80px"></label>
     <label class="cell"><span class="grow">Descanso largo</span><input type="number" min="1" max="120" data-p="long" value="${P.long}" style="width:80px"></label>
     <label class="cell"><span class="grow">Bloques de estudio antes del descanso largo</span><input type="number" min="1" max="12" data-p="every" value="${P.every}" style="width:80px"></label>
-    <label class="cell"><span class="grow">Empezar el descanso solo</span><input type="checkbox" class="switch" data-p="autoBreak" ${P.autoBreak?'checked':''}></label>
-    <label class="cell"><span class="grow">Empezar el siguiente bloque de estudio solo<div class="sub">Si está apagado, esperas a pulsar Empezar</div></span><input type="checkbox" class="switch" data-p="autoStudy" ${P.autoStudy?'checked':''}></label>
-    <label class="cell"><span class="grow">Aviso sonoro al terminar cada fase</span><input type="checkbox" class="switch" data-p="sound" ${P.sound?'checked':''}></label>
+    <label class="cell"><span class="grow">Aviso sonoro al cumplirse cada tiempo<div class="sub">El reloj no cambia de fase solo: pasas tú con » Descanso o » Estudio</div></span><input type="checkbox" class="switch" data-p="sound" ${P.sound?'checked':''}></label>
   </div>
   <p class="section-f">Solo cuenta como estudio el tiempo de los bloques de estudio; los descansos no se guardan en el registro.</p>
   <div class="section-h">Objetivo diario</div>
